@@ -93,92 +93,118 @@ def _mapping_wizard(df: pd.DataFrame) -> Optional[MappingConfig]:
 
 def _load_source() -> Optional[pd.DataFrame]:
     st.sidebar.subheader("Data source")
+    use_sample = st.sidebar.checkbox("Use sample_truth.csv", value=False)
     uploader = st.sidebar.file_uploader("Upload rubric CSV", type=["csv"])
-    if st.sidebar.button("Load sample truth"):
+
+    if use_sample:
         return pd.read_csv(DATA_DIR / "sample_truth.csv")
-    if uploader:
+    if uploader is not None:
         return pd.read_csv(uploader)
     return None
 
 
 def _exam_order(df: pd.DataFrame) -> list[str]:
     unique = sorted(df["exam_id"].dropna().unique())
-    mode = st.sidebar.radio("Exam ordering", options=["Lexicographic", "Reverse lexicographic"], index=0)
-    return unique if mode == "Lexicographic" else list(reversed(unique))
+    mode = st.sidebar.radio("Exam order", options=["Lexicographic", "Manual"], index=0)
+    if mode == "Manual":
+        ordered = st.sidebar.multiselect("Select exams in desired order", options=unique, default=unique)
+        if ordered:
+            return ordered
+    return unique
 
 
 def _render_overview(df: pd.DataFrame, exam_order: list[str]):
     summary = metrics.overall_summary(df)
+    errors = metrics.summarize_errors(df)
+
+    total_points = df["points_lost"].sum()
+    unique_rubrics = df["rubric_item"].nunique()
+
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Students", summary["students"])
-    col2.metric("Exams", summary["exams"])
-    col3.metric("Rows", summary["rows"])
-    _metric_card("Avg points lost", summary["avg_points_lost"])
+    col1.metric("Rows", summary["rows"])
+    col2.metric("Students", summary["students"])
+    col3.metric("Rubric items", unique_rubrics)
+    _metric_card("Total points lost", total_points)
 
-    rubrics = metrics.rubric_item_stats(df)
-    exams = metrics.exam_breakdown(df)
-    students = metrics.student_summary(df, exam_order=exam_order)
-    distribution = metrics.score_distribution(df)
+    # Top tables
+    top_by_points = errors.sort_values("points_lost_total", ascending=False).head(10)
+    top_by_students = errors.sort_values("students_affected", ascending=False).head(10)
 
-    chart_col, pie_col = st.columns([2, 1])
-    with chart_col:
-        dist_fig = plots.distribution_chart(distribution)
-        st.plotly_chart(dist_fig, use_container_width=True)
-        _download_fig("Export distribution (PNG)", dist_fig, "distribution.png")
-    with pie_col:
-        pie_fig = plots.exam_pie(exams)
-        st.plotly_chart(pie_fig, use_container_width=True)
-        _download_fig("Export exam pie (PNG)", pie_fig, "exams.png")
+    st.subheader("Top rubric items by points lost")
+    st.dataframe(top_by_points, use_container_width=True, height=260)
+    _download_df("Download (CSV) — points lost", top_by_points, "top_rubric_points.csv")
 
-    st.subheader("Tables")
-    st.write("Rubric items")
-    st.dataframe(rubrics, use_container_width=True, height=260)
-    _download_df("Export rubric table", rubrics, "rubric_items.csv")
+    st.subheader("Top rubric items by students affected")
+    st.dataframe(top_by_students, use_container_width=True, height=260)
+    _download_df("Download (CSV) — students affected", top_by_students, "top_rubric_students.csv")
 
-    st.write("Exams")
-    st.dataframe(exams, use_container_width=True, height=220)
-    _download_df("Export exams table", exams, "exams.csv")
+    st.subheader("Charts")
+    import plotly.express as px
 
-    st.write("Students")
-    st.dataframe(students, use_container_width=True, height=260)
-    _download_df("Export students table", students, "students.csv")
+    chart_col1, chart_col2 = st.columns(2)
+    with chart_col1:
+        count_fig = px.bar(
+            errors.sort_values("count_rows", ascending=False),
+            x="rubric_item",
+            y="count_rows",
+            title="Occurrences by rubric item",
+            labels={"rubric_item": "Rubric item", "count_rows": "Row count"},
+        )
+        st.plotly_chart(count_fig, use_container_width=True)
+        _download_fig("Export count bar (PNG)", count_fig, "rubric_counts.png")
+    with chart_col2:
+        points_fig = px.bar(
+            errors.sort_values("points_lost_total", ascending=False),
+            x="rubric_item",
+            y="points_lost_total",
+            title="Points lost by rubric item",
+            labels={"rubric_item": "Rubric item", "points_lost_total": "Total points lost"},
+        )
+        st.plotly_chart(points_fig, use_container_width=True)
+        _download_fig("Export points bar (PNG)", points_fig, "rubric_points_total.png")
 
-    st.write("Normalized data")
-    st.dataframe(df.head(200), use_container_width=True, height=300)
-    _download_df("Export normalized dataset", df, "normalized.csv")
+    st.subheader("Normalized data preview")
+    st.dataframe(df.head(200), use_container_width=True, height=320)
+    _download_df("Download normalized dataset (CSV)", df, "normalized.csv")
 
 
-def _render_persistence(df: pd.DataFrame):
-    st.write("Save or load normalized data")
-    path_str = st.text_input("Path", value=str(DEFAULT_PERSIST_PATH))
-    target = Path(path_str)
+def _render_persistence(df: pd.DataFrame, exam_order: list[str]):
+    persistence = metrics.compute_persistence(df, exam_order=exam_order)
+    persistence = persistence.sort_values(by="persistence_rate", ascending=False)
+    st.subheader("Persistence by rubric item")
+    st.dataframe(persistence, use_container_width=True, height=320)
+    _download_df("Download persistence (CSV)", persistence, "persistence.csv")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Save normalized dataset"):
-            metrics.persist_dataset(df, target)
-            st.success(f"Saved to {target}")
-    with col2:
-        if st.button("Load dataset from path"):
-            if target.exists():
-                loaded = metrics.load_persisted_dataset(target)
-                st.session_state["normalized_df"] = loaded
-                st.success(f"Loaded {len(loaded)} rows")
-            else:
-                st.error("Path does not exist")
+    st.subheader("Rubric occurrences by exam (heatmap)")
+    long_counts = metrics.error_by_exam(df)
+    pivot = long_counts.pivot_table(index="rubric_item", columns="exam_id", values="count_rows", aggfunc="sum", fill_value=0)
+
+    import plotly.express as px
+
+    heatmap = px.imshow(pivot, text_auto=True, aspect="auto", color_continuous_scale="Blues", title="Count of rubric items per exam")
+    st.plotly_chart(heatmap, use_container_width=True)
+    _download_fig("Download heatmap (PNG)", heatmap, "rubric_exam_heatmap.png")
 
 
 def _render_quality(df: pd.DataFrame):
-    st.write("Invariant checks")
+    st.subheader("Invariant checks")
     results = invariants.run_invariants(df)
-    for res in results:
-        status = "✅" if res["ok"] else "⚠️"
-        st.write(f"{status} {res['name']}: {res['detail']}")
+    res_df = pd.DataFrame(results)
+    st.dataframe(res_df, use_container_width=True, height=200)
+
+    st.subheader("Schema (columns and dtypes)")
+    dtype_df = pd.DataFrame({"column": df.columns, "dtype": df.dtypes.astype(str)})
+    st.dataframe(dtype_df, use_container_width=True, height=200)
+
+    st.subheader("Cleaning summary")
+    st.write("Rows dropped during normalization: 0 (data is validated but not dropped).")
 
 
 def main():
     st.title("Gradescope Rubric Analytics")
-    st.caption("Map arbitrary rubric exports into analytics-ready tables and charts.")
+    st.write("Turn Gradescope rubric CSVs into dashboards: upload, map columns, validate, and explore analytics.")
+    st.info("Accepts CSV uploads; if headers are non-canonical, use the mapping wizard to align to the canonical schema.")
+    st.warning("Use anonymized or non-PII exports — this app does not store data.")
 
     raw_df = _load_source()
     if raw_df is None:
@@ -222,7 +248,7 @@ def main():
     with overview_tab:
         _render_overview(normalized_df, exam_order)
     with persistence_tab:
-        _render_persistence(normalized_df)
+        _render_persistence(normalized_df, exam_order)
     with quality_tab:
         _render_quality(normalized_df)
 
