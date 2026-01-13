@@ -11,6 +11,8 @@ Option A architecture (Streamlit-only) with all analytics in a reusable Python p
 - Exam ordering control (lexicographic by default).
 
 ## Local development (venv)
+> Recommended Python: **3.12** (matches CI). If using pyenv, set the version via `.python-version` or `pyenv local 3.12.0`.
+
 1. Create and activate a virtualenv
    ```bash
    python -m venv .venv
@@ -20,7 +22,7 @@ Option A architecture (Streamlit-only) with all analytics in a reusable Python p
    ```bash
    pip install -r requirements.txt
    ```
-3. Run the Streamlit app
+3. Run the Streamlit app (single supported entrypoint)
    ```bash
    PYTHONPATH=src streamlit run app/app.py
    ```
@@ -45,7 +47,7 @@ docker compose up --build
 ```
 
 ## CI
-GitHub Actions (`.github/workflows/ci.yml`) runs `pytest` on each push and pull request.
+GitHub Actions (`.github/workflows/ci.yml`) runs `pytest` on each push and pull request using Python 3.12.
 
 ## Project layout
 - `src/gradescope_analytics/` – library code (io, mapping, invariants, metrics, plots)
