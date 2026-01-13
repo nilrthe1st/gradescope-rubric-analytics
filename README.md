@@ -4,7 +4,8 @@ Option A architecture (Streamlit-only) with all analytics in a reusable Python p
 
 ## Features
 - Upload Gradescope-style rubric CSVs or use the bundled sample truth dataset.
-- Mapping wizard when headers are non-canonical; canonical schema is `student_id, student_name, assignment, rubric_item, category, score, max_score, comment`.
+- Canonical schema: `student_id, exam_id, question_id, rubric_item, points_lost` (+ optional `topic`).
+- Mapping wizard appears when headers are non-canonical; mapping is required for every canonical field (topic optional). Mapping persists in session state.
 - Tabs: Overview (stats, charts, tables), Persistence (save/load normalized data), Data Quality (invariant checks).
 - Export buttons for tables and charts (CSV + PNG).
 - Exam ordering control (lexicographic by default).

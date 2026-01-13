@@ -5,6 +5,7 @@ import pandas as pd
 
 from .mapping import (
     CANONICAL_COLUMNS,
+    REQUIRED_CANONICAL,
     MappingConfig,
     apply_mapping,
     ensure_canonical_columns,
@@ -14,11 +15,12 @@ from .mapping import (
 
 
 def read_csv(source: str | Path | IO[str] | IO[bytes]) -> pd.DataFrame:
-    return pd.read_csv(source)
+    # Preserve literal strings like "None" instead of auto-converting to NaN so we can validate explicitly.
+    return pd.read_csv(source, keep_default_na=False)
 
 
 def is_canonical(df: pd.DataFrame) -> bool:
-    return all(col in df.columns for col in CANONICAL_COLUMNS)
+    return all(col in df.columns for col in REQUIRED_CANONICAL)
 
 
 def load_and_normalize(
@@ -48,9 +50,6 @@ def normalize_dataframe(
         mapping = MappingConfig.from_dict(suggested)
 
     normalized = apply_mapping(df, mapping)
-    normalized.loc[:, "assignment"] = normalized["assignment"].fillna("Assessment")
-    normalized.loc[:, "category"] = normalized["category"].fillna("Uncategorized")
-    normalized.loc[:, "comment"] = normalized["comment"].fillna("")
     return normalized, mapping, suggested
 
 

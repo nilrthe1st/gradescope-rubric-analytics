@@ -1,7 +1,12 @@
-student_id,student_name,assignment,rubric_item,category,score,max_score,comment
-s101,Alex Kim,Project 1,Correctness,Technical,8,10,Missed edge case
-s101,Alex Kim,Project 1,Style,Technical,3,5,Variable naming
-s102,Riley Chen,Project 1,Correctness,Technical,10,10,Great work
-s102,Riley Chen,Project 1,Style,Technical,5,5,Clean code
-s103,Jordan Patel,Project 1,Correctness,Technical,6,10,Two failing tests
-s103,Jordan Patel,Project 1,Style,Technical,4,5,Spacing issues
+student_id,exam_id,question_id,rubric_item,points_lost,topic
+s1,Exam1,Q1,Arrow direction,2.0,Mechanism
+s1,Exam2,Q2,Arrow direction,1.5,Mechanism
+s2,Exam1,Q1,Arrow direction,1.0,Mechanism
+s2,Exam3,Q3,Arrow direction,2.0,Mechanism
+s3,Exam1,Q2,Charge conservation,1.5,Charge
+s4,Exam2,Q1,Wrong nucleophile,2.0,Nucleophile
+s4,Exam3,Q1,Wrong nucleophile,1.5,Nucleophile
+s5,Exam1,Q1,Stereochem,0.5,Stereochemistry
+s5,Exam3,Q2,Stereochem,1.0,Stereochemistry
+s6,Exam2,Q2,Arrow direction,0.5,Mechanism
+s6,Exam2,Q2,Resonance error,1.0,Resonance

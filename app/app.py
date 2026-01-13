@@ -46,20 +46,28 @@ def _download_fig(label: str, fig, filename: str):
 def _mapping_wizard(df: pd.DataFrame) -> Optional[MappingConfig]:
     st.subheader("Mapping wizard")
     suggested = suggest_mapping(df)
-    cols = [None] + list(df.columns)
+    saved = st.session_state.get("saved_mapping")
+    required_cols = list(df.columns)
+    optional_cols = [None] + list(df.columns)
+
+    def idx(key):
+        preset = None
+        if saved:
+            preset = saved.get(key)
+        if not preset:
+            preset = suggested.get(key)
+        return required_cols.index(preset) if preset in required_cols else 0
 
     with st.form("mapping_form"):
         left, right = st.columns(2)
         with left:
-            student_id = st.selectbox("Student ID", options=cols, index=cols.index(suggested.get("student_id")) if suggested.get("student_id") in cols else 0)
-            student_name = st.selectbox("Student name", options=cols, index=cols.index(suggested.get("student_name")) if suggested.get("student_name") in cols else 0)
-            assignment = st.selectbox("Assignment / exam", options=cols, index=cols.index(suggested.get("assignment")) if suggested.get("assignment") in cols else 0)
-            rubric_item = st.selectbox("Rubric item", options=cols, index=cols.index(suggested.get("rubric_item")) if suggested.get("rubric_item") in cols else 0)
+            student_id = st.selectbox("student_id", options=required_cols, index=idx("student_id"))
+            exam_id = st.selectbox("exam_id", options=required_cols, index=idx("exam_id"))
+            question_id = st.selectbox("question_id", options=required_cols, index=idx("question_id"))
         with right:
-            category = st.selectbox("Category", options=cols, index=cols.index(suggested.get("category")) if suggested.get("category") in cols else 0)
-            score = st.selectbox("Score", options=cols, index=cols.index(suggested.get("score")) if suggested.get("score") in cols else 0)
-            max_score = st.selectbox("Max score", options=cols, index=cols.index(suggested.get("max_score")) if suggested.get("max_score") in cols else 0)
-            comment = st.selectbox("Comment", options=cols, index=cols.index(suggested.get("comment")) if suggested.get("comment") in cols else 0)
+            rubric_item = st.selectbox("rubric_item", options=required_cols, index=idx("rubric_item"))
+            points_lost = st.selectbox("points_lost", options=required_cols, index=idx("points_lost"))
+            topic = st.selectbox("topic (optional)", options=optional_cols, index=0 if saved is None and suggested.get("topic") is None else optional_cols.index(saved.get("topic")) if saved and saved.get("topic") in optional_cols else optional_cols.index(suggested.get("topic")) if suggested.get("topic") in optional_cols else 0)
         submitted = st.form_submit_button("Apply mapping")
 
     if not submitted:
@@ -67,17 +75,17 @@ def _mapping_wizard(df: pd.DataFrame) -> Optional[MappingConfig]:
 
     mapping_dict = {
         "student_id": student_id,
-        "student_name": student_name,
-        "assignment": assignment,
+        "exam_id": exam_id,
+        "question_id": question_id,
         "rubric_item": rubric_item,
-        "category": category,
-        "score": score,
-        "max_score": max_score,
-        "comment": comment,
+        "points_lost": points_lost,
+        "topic": topic if topic else None,
     }
 
     try:
-        return MappingConfig.from_dict(mapping_dict)
+        mapping_cfg = MappingConfig.from_dict(mapping_dict)
+        st.session_state["saved_mapping"] = mapping_dict
+        return mapping_cfg
     except ValueError as exc:
         st.error(str(exc))
         return None
@@ -93,23 +101,23 @@ def _load_source() -> Optional[pd.DataFrame]:
     return None
 
 
-def _assignment_order(df: pd.DataFrame) -> list[str]:
-    unique = sorted(df["assignment"].dropna().unique())
+def _exam_order(df: pd.DataFrame) -> list[str]:
+    unique = sorted(df["exam_id"].dropna().unique())
     mode = st.sidebar.radio("Exam ordering", options=["Lexicographic", "Reverse lexicographic"], index=0)
     return unique if mode == "Lexicographic" else list(reversed(unique))
 
 
-def _render_overview(df: pd.DataFrame, assignment_order: list[str]):
+def _render_overview(df: pd.DataFrame, exam_order: list[str]):
     summary = metrics.overall_summary(df)
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Students", summary["students"])
-    col2.metric("Assignments", summary["assignments"])
+    col2.metric("Exams", summary["exams"])
     col3.metric("Rows", summary["rows"])
-    _metric_card("Average score", summary["avg_score"])
+    _metric_card("Avg points lost", summary["avg_points_lost"])
 
     rubrics = metrics.rubric_item_stats(df)
-    categories = metrics.category_breakdown(df)
-    students = metrics.student_summary(df, assignment_order=assignment_order)
+    exams = metrics.exam_breakdown(df)
+    students = metrics.student_summary(df, exam_order=exam_order)
     distribution = metrics.score_distribution(df)
 
     chart_col, pie_col = st.columns([2, 1])
@@ -118,25 +126,25 @@ def _render_overview(df: pd.DataFrame, assignment_order: list[str]):
         st.plotly_chart(dist_fig, use_container_width=True)
         _download_fig("Export distribution (PNG)", dist_fig, "distribution.png")
     with pie_col:
-        pie_fig = plots.category_pie(categories)
+        pie_fig = plots.exam_pie(exams)
         st.plotly_chart(pie_fig, use_container_width=True)
-        _download_fig("Export category pie (PNG)", pie_fig, "categories.png")
+        _download_fig("Export exam pie (PNG)", pie_fig, "exams.png")
 
     st.subheader("Tables")
     st.write("Rubric items")
-    st.dataframe(rubrics, use_container_width=True, height=300)
+    st.dataframe(rubrics, use_container_width=True, height=260)
     _download_df("Export rubric table", rubrics, "rubric_items.csv")
 
-    st.write("Categories")
-    st.dataframe(categories, use_container_width=True, height=220)
-    _download_df("Export categories table", categories, "categories.csv")
+    st.write("Exams")
+    st.dataframe(exams, use_container_width=True, height=220)
+    _download_df("Export exams table", exams, "exams.csv")
 
     st.write("Students")
-    st.dataframe(students, use_container_width=True, height=320)
+    st.dataframe(students, use_container_width=True, height=260)
     _download_df("Export students table", students, "students.csv")
 
     st.write("Normalized data")
-    st.dataframe(df, use_container_width=True, height=300)
+    st.dataframe(df.head(200), use_container_width=True, height=300)
     _download_df("Export normalized dataset", df, "normalized.csv")
 
 
@@ -177,26 +185,42 @@ def main():
         st.info("Upload a CSV or load the sample truth to begin.")
         return
 
-    normalized_df = None
+    normalized_df: Optional[pd.DataFrame] = None
+    mapping_cfg: Optional[MappingConfig] = None
+
     if needs_mapping(raw_df):
         mapping_cfg = _mapping_wizard(raw_df)
-        if mapping_cfg:
-            normalized_df, _, _ = normalize_dataframe(raw_df, mapping=mapping_cfg, infer_mapping=False)
+        if not mapping_cfg:
+            st.warning("Select a column for each required field to continue.")
+            return
     else:
-        normalized_df, _, _ = normalize_dataframe(raw_df, infer_mapping=False)
+        st.info("Headers match canonical schema; mapping skipped.")
 
-    if normalized_df is None:
-        st.warning("Apply a mapping to continue.")
+    try:
+        normalized_df, _, _ = normalize_dataframe(raw_df, mapping=mapping_cfg, infer_mapping=mapping_cfg is None)
+    except ValueError as exc:
+        st.error(f"Normalization failed: {exc}")
         return
 
     st.success("Dataset normalized.")
+    st.write("### Preview (first 20 rows)")
+    st.dataframe(normalized_df.head(20), use_container_width=True)
+
+    st.write("### Validation")
+    quality_results = invariants.run_invariants(normalized_df)
+    for res in quality_results:
+        status = "✅" if res["ok"] else "⚠️"
+        st.write(f"{status} {res['name']}: {res['detail']}")
+    if not all(res["ok"] for res in quality_results):
+        st.warning("Please address validation issues before relying on analytics.")
+
     st.session_state["normalized_df"] = normalized_df
 
-    assignment_order = _assignment_order(normalized_df)
+    exam_order = _exam_order(normalized_df)
     overview_tab, persistence_tab, quality_tab = st.tabs(["Overview", "Persistence", "Data Quality"])
 
     with overview_tab:
-        _render_overview(normalized_df, assignment_order)
+        _render_overview(normalized_df, exam_order)
     with persistence_tab:
         _render_persistence(normalized_df)
     with quality_tab:
