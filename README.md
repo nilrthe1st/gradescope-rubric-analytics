@@ -10,22 +10,42 @@ Option A architecture (Streamlit-only) with all analytics in a reusable Python p
 - Export buttons for tables and charts (CSV + PNG).
 - Exam ordering control (lexicographic by default).
 
-## Quickstart
-1. Create and activate a virtualenv (recommended).
-2. Install dependencies:
+## Local development (venv)
+1. Create and activate a virtualenv
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   ```
+2. Install dependencies
    ```bash
    pip install -r requirements.txt
    ```
-3. Run the Streamlit app:
+3. Run the Streamlit app
    ```bash
    PYTHONPATH=src streamlit run app/app.py
    ```
-4. In the sidebar, upload a CSV or click **Load sample truth**.
+4. In the sidebar, upload a CSV or check **Use sample_truth.csv** to explore the bundled data.
 
 ## Testing
+Run the library tests locally:
 ```bash
 PYTHONPATH=src pytest
 ```
+
+## Docker
+Build and run the Streamlit app in a container:
+```bash
+docker build -t gradescope-rubric-analytics .
+docker run -p 8501:8501 gradescope-rubric-analytics
+```
+
+Or use Compose (rebuilds when code changes thanks to the bind mount):
+```bash
+docker compose up --build
+```
+
+## CI
+GitHub Actions (`.github/workflows/ci.yml`) runs `pytest` on each push and pull request.
 
 ## Project layout
 - `src/gradescope_analytics/` – library code (io, mapping, invariants, metrics, plots)
