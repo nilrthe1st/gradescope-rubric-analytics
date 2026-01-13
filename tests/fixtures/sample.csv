@@ -1,0 +1,7 @@
+Student Name,Student ID,Assignment,Rubric Item,Category,Score,Max Score,Comment
+Alex Kim,s101,Project 1,Correctness,Technical,8,10,Missed edge case
+Alex Kim,s101,Project 1,Style,Technical,3,5,Variable naming
+Riley Chen,s102,Project 1,Correctness,Technical,10,10,Great work
+Riley Chen,s102,Project 1,Style,Technical,5,5,Clean code
+Jordan Patel,s103,Project 1,Correctness,Technical,6,10,Two failing tests
+Jordan Patel,s103,Project 1,Style,Technical,4,5,Spacing issues
