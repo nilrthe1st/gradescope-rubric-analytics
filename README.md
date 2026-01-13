@@ -1,40 +1,43 @@
 # Gradescope Rubric Analytics
 
-A self-contained web app (Streamlit) for exploring Gradescope-style rubric exports. Upload CSVs, map columns to standard fields, and view rubric, category, and student-level analytics—no Gradescope login or scraping.
+Option A architecture (Streamlit-only) with all analytics in a reusable Python package.
 
 ## Features
-- Upload instructor or student-provided CSV exports (Gradescope rubric detail works best)
-- Mapping wizard to normalize arbitrary column names to a common schema
-- Core analytics: rubric item stats, category breakdowns, score distributions, per-student summaries
-- Interactive visuals (Plotly) and downloadable normalized data
-- Sample dataset bundled for quick demos
+- Upload Gradescope-style rubric CSVs or use the bundled sample truth dataset.
+- Mapping wizard when headers are non-canonical; canonical schema is `student_id, student_name, assignment, rubric_item, category, score, max_score, comment`.
+- Tabs: Overview (stats, charts, tables), Persistence (save/load normalized data), Data Quality (invariant checks).
+- Export buttons for tables and charts (CSV + PNG).
+- Exam ordering control (lexicographic by default).
 
 ## Quickstart
-1. **Install dependencies** (preferably in a virtualenv):
+1. Create and activate a virtualenv (recommended).
+2. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-2. **Run the app**:
+3. Run the Streamlit app:
    ```bash
-   streamlit run streamlit_app.py
+   PYTHONPATH=src streamlit run app/app.py
    ```
-3. Open the provided local URL in your browser and either upload a CSV or load the sample data.
+4. In the sidebar, upload a CSV or click **Load sample truth**.
 
-## Data expectations
-The mapping wizard can align most CSVs to this schema:
-- `student_id`, `student_name`, `assignment`, `rubric_item`, `category`, `score`, `max_score`, `comment`
-
-## Tests
-Run unit tests with pytest:
+## Testing
 ```bash
-pytest
+PYTHONPATH=src pytest
 ```
 
-## Repository layout
-- `app/` core logic (ingestion, mapping, analytics, sample data)
-- `streamlit_app.py` Streamlit UI
-- `tests/` unit tests and fixtures
+## Project layout
+- `src/gradescope_analytics/` – library code (io, mapping, invariants, metrics, plots)
+- `app/app.py` – Streamlit UI that consumes the library
+- `data/sample_truth.csv` – canonical sample dataset
+- `tests/` – pytest suite for the library
+
+## Optional: Docker
+Build and run locally:
+```bash
+docker compose up --build
+```
 
 ## Notes
-- All processing stays local; no external APIs are called.
-- If your export lacks some fields (e.g., category), leave them unmapped; the app handles missing optional fields gracefully.
+- All analytics live in the library; the UI orchestrates only.
+- Persistence tab writes normalized CSVs under `data/` by default.
