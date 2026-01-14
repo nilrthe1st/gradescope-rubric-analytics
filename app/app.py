@@ -190,6 +190,12 @@ def _render_quality(df: pd.DataFrame):
     st.subheader("Invariant checks")
     results = invariants.run_invariants(df)
     res_df = pd.DataFrame(results)
+
+    # Make Arrow serialization stable for Streamlit display (mixed int/str in `detail`)
+    if "detail" in res_df.columns:
+        res_df = res_df.copy()
+        res_df["detail"] = res_df["detail"].fillna("").astype(str)
+
     st.dataframe(res_df, use_container_width=True, height=200)
 
     st.subheader("Schema (columns and dtypes)")
