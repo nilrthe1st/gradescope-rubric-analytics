@@ -26,7 +26,6 @@ data/normalized_*.csv
 data/persisted/
 
 # Streamlit
-.streamlit/config.toml
 .streamlit/secrets.toml
 
 # macOS
