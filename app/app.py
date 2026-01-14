@@ -264,6 +264,7 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
                 labels={"rubric_item": "Rubric item", "count_rows": "Row count"},
                 title="Occurrences by rubric item",
             )
+            count_fig.update_traces(hovertemplate="<b>%{x}</b><br>Rows: %{y}<extra></extra>")
             _style_fig(count_fig)
             st.plotly_chart(count_fig, use_container_width=True)
             _download_fig("Export count bar (PNG)", count_fig, "rubric_counts.png")
@@ -275,6 +276,7 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
                 labels={"rubric_item": "Rubric item", "points_lost_total": "Total points lost"},
                 title="Points lost by rubric item",
             )
+            points_fig.update_traces(hovertemplate="<b>%{x}</b><br>Total points lost: %{y}<extra></extra>")
             _style_fig(points_fig)
             st.plotly_chart(points_fig, use_container_width=True)
             _download_fig("Export points bar (PNG)", points_fig, "rubric_points_total.png")
@@ -310,7 +312,13 @@ def _render_persistence(df: pd.DataFrame, exam_order: List[str]):
         title="Count of rubric items per exam",
         labels={"color": "Count"},
     )
-    heatmap.update_layout(margin=dict(t=60, r=30, b=40, l=40), font=dict(color="#e5e7eb"), paper_bgcolor="#0b1220", plot_bgcolor="#0b1220")
+    heatmap.update_layout(
+        margin=dict(t=60, r=30, b=40, l=40),
+        font=dict(color="#e5e7eb"),
+        paper_bgcolor="#0b1220",
+        plot_bgcolor="#0b1220",
+        coloraxis_colorbar=dict(title="Count", bgcolor="#0b1220"),
+    )
     st.plotly_chart(heatmap, use_container_width=True)
     _download_fig("Download heatmap (PNG)", heatmap, "rubric_exam_heatmap.png")
 
