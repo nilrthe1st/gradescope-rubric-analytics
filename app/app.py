@@ -29,6 +29,16 @@ st.set_page_config(page_title="Gradescope Rubric Analytics", layout="wide", page
 DATA_DIR = ROOT / "data"
 
 
+def _rerun():
+    """Compat wrapper for rerun across Streamlit versions."""
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    else:  # pragma: no cover - defensive
+        raise RuntimeError("Streamlit rerun API not available")
+
+
 def _init_state() -> None:
     defaults = {
         "demo_mode": False,
@@ -159,7 +169,7 @@ def _render_empty_state(shell: AppShell):
         )
         if st.button("Turn on demo mode"):
             st.session_state["demo_mode"] = True
-            st.experimental_rerun()
+            _rerun()
 
 
 def _set_rubric_selection(rubric: Optional[str]):

@@ -201,8 +201,7 @@ def kpi_row(items: Iterable[dict]):
     cols = st.columns(len(items)) if items else []
     for col, item in zip(cols, items):
         with col:
-            st.markdown(
-                f"""
+            st.markdown(f"""
                 <div class='app-kpi'>
                     <div class='label'>{item.get('label','')}</div>
                     <div class='value'>{item.get('value','-')}</div>
