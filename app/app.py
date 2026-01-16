@@ -5,6 +5,7 @@ exploration while keeping analytics logic in ``src/gradescope_analytics``.
 """
 
 import sys
+from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -12,6 +13,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 import json
+from datetime import datetime
 from itertools import combinations
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -332,6 +334,25 @@ def _render_course_structure(df: pd.DataFrame):
         _render_group("TA", ta_stats, "ta_id", "ta_comparison.csv")
 
 
+def _render_exports(df: pd.DataFrame, errors: pd.DataFrame, persistence: pd.DataFrame, rec_df: Optional[pd.DataFrame]):
+    st.subheader("Exports")
+
+    st.caption("Download key summaries or generate an instructor-ready PDF.")
+    top_errors = errors.sort_values("points_lost_total", ascending=False).head(20) if not errors.empty else pd.DataFrame()
+    _download_df("Download top issues (CSV)", top_errors, "top_issues.csv")
+
+    _download_df("Download persistence (CSV)", persistence, "persistence.csv")
+
+    if rec_df is not None and not rec_df.empty:
+        _download_df("Download recommendations (CSV)", rec_df, "recommendations.csv")
+
+    pdf_bytes, pdf_err = _generate_pdf_report(top_errors, persistence, rec_df)
+    if pdf_err:
+        st.warning(pdf_err)
+    elif pdf_bytes:
+        st.download_button("Generate instructor report (PDF)", data=pdf_bytes, file_name="instructor_report.pdf", mime="application/pdf")
+
+
 def _misconception_clusters(df: pd.DataFrame, jaccard_threshold: float = 0.2, corr_threshold: float = 0.3, min_support: int = 2):
     scoped = df.copy()
     scoped.loc[:, "rubric_item"] = scoped["rubric_item"].fillna("").astype(str).str.strip()
@@ -480,6 +501,72 @@ def _style_fig(fig, title: Optional[str] = None):
     return fig
 
 
+def _generate_pdf_report(top_issues: pd.DataFrame, persistence: pd.DataFrame, recs: Optional[pd.DataFrame]):
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return None, f"reportlab not installed: {exc}"
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    margin = 48
+    y = height - margin
+
+    def header(text):
+        nonlocal y
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(margin, y, text)
+        y -= 18
+
+    def line(text):
+        nonlocal y
+        if y < margin + 40:
+            c.showPage()
+            y = height - margin
+        c.setFont("Helvetica", 11)
+        c.drawString(margin, y, text)
+        y -= 14
+
+    c.setTitle("Instructor Report")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(margin, y, "Gradescope Rubric Analytics — Instructor Report")
+    y -= 18
+    c.setFont("Helvetica", 10)
+    c.drawString(margin, y, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} (local)")
+    y -= 24
+
+    header("Top issues")
+    if top_issues is None or top_issues.empty:
+        line("No rubric issues available.")
+    else:
+        for _, row in top_issues.head(8).iterrows():
+            line(f"- {row['rubric_item']} | rows {int(row['count_rows'])} | students {int(row['students_affected'])} | pts {row['points_lost_total']:.1f}")
+
+    y -= 10
+    header("Persistence")
+    if persistence is None or persistence.empty:
+        line("Not enough exams to compute persistence.")
+    else:
+        for _, row in persistence.head(6).iterrows():
+            line(f"- {row['rubric_item']}: cohort {int(row['cohort_size'])}, repeated {int(row['repeated'])}, rate {row['persistence_rate']:.1%}")
+
+    y -= 10
+    header("Recommendations")
+    if recs is None or recs.empty:
+        line("No recommendations available.")
+    else:
+        for _, row in recs.head(6).iterrows():
+            line(f"- {row['action']} {row['concept']} (impact {row['impact_score']:.1f}, students {int(row['students'])}, pts {row['points_lost_total']:.1f})")
+
+    c.showPage()
+    c.save()
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes, None
+
+
 def _render_empty_state(shell: AppShell):
     with card("Welcome", "Load a sample or upload a CSV to explore analytics"):
         st.markdown(
@@ -621,7 +708,10 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
     _render_misconceptions(df)
 
     st.divider()
-    _render_recommendations(df, exam_order)
+    rec_df = _render_recommendations(df, exam_order)
+
+    st.divider()
+    _render_exports(df, errors, persistence, rec_df)
 
     st.divider()
     _render_predictive(df, exam_order)
@@ -797,13 +887,13 @@ def _predict_future_risks(df: pd.DataFrame, exam_order: List[str]):
     return score_df, coef_df, None
 
 
-def _render_recommendations(df: pd.DataFrame, exam_order: List[str]):
+def _compute_recommendations(df: pd.DataFrame, exam_order: List[str]):
     st.subheader("What to change next week")
 
     concept_stats = _concept_stats(df)
     if concept_stats.empty:
         st.info("No concept data available yet; add topics or concept mappings.")
-        return
+        return []
 
     concept_stats = concept_stats.copy()
     concept_stats.loc[:, "impact_score"] = concept_stats["points_lost_total"] * concept_stats["students_affected"].clip(lower=1)
@@ -832,9 +922,14 @@ def _render_recommendations(df: pd.DataFrame, exam_order: List[str]):
             }
         )
 
+    return recs
+
+
+def _render_recommendations(df: pd.DataFrame, exam_order: List[str]):
+    recs = _compute_recommendations(df, exam_order)
+
     if not recs:
-        st.info("No recommendations available yet.")
-        return
+        return None
 
     st.markdown("Guidance focuses on concepts with highest combined impact (points lost × students affected), adjusted by persistence where available.")
 
@@ -850,6 +945,7 @@ def _render_recommendations(df: pd.DataFrame, exam_order: List[str]):
     rec_df = pd.DataFrame(recs)
     st.dataframe(rec_df[["concept", "action", "impact_score", "students", "points_lost_total", "persistence_rate"]], use_container_width=True, height=320)
     _download_df("Download recommendations", rec_df, "recommendations.csv")
+    return rec_df
 
 
 def _render_predictive(df: pd.DataFrame, exam_order: List[str]):
