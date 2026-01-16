@@ -12,6 +12,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 import json
+from itertools import combinations
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -201,6 +202,79 @@ def _concept_stats(df: pd.DataFrame) -> pd.DataFrame:
 
     result = pd.DataFrame(rows)
     return result.sort_values(by="points_lost_total", ascending=False)
+
+
+def _misconception_clusters(df: pd.DataFrame, jaccard_threshold: float = 0.2, corr_threshold: float = 0.3, min_support: int = 2):
+    scoped = df.copy()
+    scoped.loc[:, "rubric_item"] = scoped["rubric_item"].fillna("").astype(str).str.strip()
+    scoped.loc[:, "student_id"] = scoped["student_id"].astype(str)
+    scoped = scoped[scoped["rubric_item"] != ""]
+
+    if scoped.empty:
+        return [], pd.DataFrame()
+
+    incidence: Dict[str, set] = defaultdict(set)
+    for student_id, sub in scoped.groupby("student_id"):
+        for item in sub["rubric_item"].unique():
+            incidence[item].add(student_id)
+
+    items = [item for item, students in incidence.items() if len(students) >= min_support]
+    if len(items) < 2:
+        return [], pd.DataFrame()
+
+    edges = []
+    similarities = []
+    for a, b in combinations(items, 2):
+        sa, sb = incidence[a], incidence[b]
+        inter = len(sa & sb)
+        union = len(sa | sb)
+        if union == 0:
+            continue
+        jaccard = inter / union
+        corr = inter / ((len(sa) * len(sb)) ** 0.5) if len(sa) and len(sb) else 0.0
+        if jaccard >= jaccard_threshold or corr >= corr_threshold:
+            edges.append((a, b))
+        similarities.append({"rubric_item_a": a, "rubric_item_b": b, "jaccard": jaccard, "corr": corr, "cooccurrence": inter})
+
+    # Union-find for clustering
+    parent = {item: item for item in items}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[ry] = rx
+
+    for a, b in edges:
+        union(a, b)
+
+    clusters: Dict[str, List[str]] = defaultdict(list)
+    for item in items:
+        clusters[find(item)].append(item)
+
+    cluster_list = []
+    for idx, members in enumerate(clusters.values(), start=1):
+        member_sets = [incidence[m] for m in members]
+        support = len(set().union(*member_sets)) if member_sets else 0
+        cluster_list.append(
+            {
+                "label": f"Misconception {idx}",
+                "members": sorted(members),
+                "size": len(members),
+                "support_students": support,
+            }
+        )
+
+    sim_df = pd.DataFrame(similarities)
+    if not sim_df.empty:
+        sim_df = sim_df.sort_values(by="jaccard", ascending=False)
+
+    return cluster_list, sim_df
 
 
 def _concept_mapping_controls(df: pd.DataFrame) -> Dict[str, str]:
@@ -413,6 +487,9 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
         st.plotly_chart(concept_fig, use_container_width=True)
 
     st.divider()
+    _render_misconceptions(df)
+
+    st.divider()
     _drilldown_selector(errors)
 
     st.subheader("Charts")
@@ -448,6 +525,34 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
         st.caption(f"Filtered by rubric item: {selected}")
     st.dataframe(filtered_df.head(200), use_container_width=True, height=320)
     _download_df("Download normalized dataset (CSV)", df, "normalized.csv")
+
+
+def _render_misconceptions(df: pd.DataFrame):
+    st.subheader("Misconception clusters")
+    clusters, sim_df = _misconception_clusters(df)
+
+    if not clusters:
+        st.info("Not enough co-occurrence data yet; upload more students or exams to see clusters.")
+        return
+
+    cols = st.columns(min(len(clusters), 3)) if clusters else []
+    for col, cluster in zip(cols * ((len(clusters) + len(cols) - 1) // len(cols)), clusters):
+        with col:
+            with card(cluster["label"], f"Teach these together; support: {cluster['support_students']} students"):
+                st.markdown(
+                    "<ul>" + "".join(f"<li>{item}</li>" for item in cluster["members"]) + "</ul>",
+                    unsafe_allow_html=True,
+                )
+
+    st.subheader("Item co-occurrence (top pairs)")
+    if sim_df.empty:
+        st.caption("No similarity pairs available yet.")
+    else:
+        top_pairs = sim_df.head(20).copy()
+        top_pairs.loc[:, "jaccard"] = top_pairs["jaccard"].round(3)
+        top_pairs.loc[:, "corr"] = top_pairs["corr"].round(3)
+        st.dataframe(top_pairs, use_container_width=True, height=320)
+        _download_df("Download co-occurrence pairs", top_pairs, "cooccurrence_pairs.csv")
 
 
 def _render_persistence(df: pd.DataFrame, exam_order: List[str]):
