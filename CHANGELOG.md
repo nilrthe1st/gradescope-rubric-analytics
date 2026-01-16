@@ -8,6 +8,7 @@
 - Introduced concept-level analytics (points lost, students affected) with downloadable rollups and charts.
 - Added persistence and trajectory analytics across exams: item-level persistence/drop-off/emergence and conditional mistake transitions with Sankey view.
 - Added misconception clustering using rubric item co-occurrence (Jaccard/correlation), with cluster cards and instructor guidance to teach items together.
+- Added instructor recommendations: high-impact and high-persistence concepts with ranked actions (“Re-teach” / “Add practice”) and downloadable guidance.
 
 ## 2026-01-12
 - Added CI workflow, Docker setup, and Streamlit UI polish for rubric analytics.

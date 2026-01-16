@@ -204,6 +204,45 @@ def _concept_stats(df: pd.DataFrame) -> pd.DataFrame:
     return result.sort_values(by="points_lost_total", ascending=False)
 
 
+def _concept_persistence(df: pd.DataFrame, exam_order: List[str]) -> pd.DataFrame:
+    if len(exam_order) < 2:
+        return pd.DataFrame(columns=["concept", "cohort_size", "repeated", "persistence_rate"])
+
+    data = df.copy()
+    data.loc[:, "concept"] = data.get("concept", "").fillna("").astype(str).str.strip()
+    data = data[data["concept"] != ""]
+    if data.empty:
+        return pd.DataFrame(columns=["concept", "cohort_size", "repeated", "persistence_rate"])
+
+    exam_rank = {exam: idx for idx, exam in enumerate(exam_order)}
+    order_list = [exam for exam in exam_order if exam in data["exam_id"].unique()]
+    if len(order_list) < 2:
+        return pd.DataFrame(columns=["concept", "cohort_size", "repeated", "persistence_rate"])
+
+    first_exam = order_list[0]
+    rows = []
+    for concept, subset in data.groupby("concept", dropna=False):
+        cohort_students = set(subset.loc[subset["exam_id"] == first_exam, "student_id"].unique())
+        if not cohort_students:
+            continue
+        later_subset = subset[subset["exam_id"].map(lambda x: exam_rank.get(x, -1) > 0)]
+        repeated = set(later_subset["student_id"].unique()) & cohort_students
+        cohort_size = len(cohort_students)
+        rows.append(
+            {
+                "concept": concept,
+                "cohort_size": cohort_size,
+                "repeated": len(repeated),
+                "persistence_rate": len(repeated) / cohort_size if cohort_size else 0.0,
+            }
+        )
+
+    result = pd.DataFrame(rows)
+    if not result.empty:
+        result = result.sort_values(by="persistence_rate", ascending=False)
+    return result
+
+
 def _misconception_clusters(df: pd.DataFrame, jaccard_threshold: float = 0.2, corr_threshold: float = 0.3, min_support: int = 2):
     scoped = df.copy()
     scoped.loc[:, "rubric_item"] = scoped["rubric_item"].fillna("").astype(str).str.strip()
@@ -490,6 +529,9 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
     _render_misconceptions(df)
 
     st.divider()
+    _render_recommendations(df, exam_order)
+
+    st.divider()
     _drilldown_selector(errors)
 
     st.subheader("Charts")
@@ -553,6 +595,61 @@ def _render_misconceptions(df: pd.DataFrame):
         top_pairs.loc[:, "corr"] = top_pairs["corr"].round(3)
         st.dataframe(top_pairs, use_container_width=True, height=320)
         _download_df("Download co-occurrence pairs", top_pairs, "cooccurrence_pairs.csv")
+
+
+def _render_recommendations(df: pd.DataFrame, exam_order: List[str]):
+    st.subheader("What to change next week")
+
+    concept_stats = _concept_stats(df)
+    if concept_stats.empty:
+        st.info("No concept data available yet; add topics or concept mappings.")
+        return
+
+    concept_stats = concept_stats.copy()
+    concept_stats.loc[:, "impact_score"] = concept_stats["points_lost_total"] * concept_stats["students_affected"].clip(lower=1)
+    concept_stats = concept_stats.sort_values(by="impact_score", ascending=False)
+
+    concept_persist = _concept_persistence(df, exam_order)
+    if concept_persist.empty:
+        concept_persist = pd.DataFrame(columns=["concept", "persistence_rate"])
+
+    recs = []
+    for _, row in concept_stats.head(5).iterrows():
+        concept = row["concept"]
+        rate = float(concept_persist[concept_persist["concept"] == concept]["persistence_rate"].fillna(0).values[0]) if not concept_persist.empty else 0.0
+        students = int(row["students_affected"])
+        pts = float(row["points_lost_total"])
+        impact = float(row["impact_score"])
+        action = "Re-teach" if rate >= 0.2 else "Add practice for"
+        recs.append(
+            {
+                "concept": concept,
+                "action": action,
+                "impact_score": impact,
+                "students": students,
+                "points_lost_total": pts,
+                "persistence_rate": rate,
+            }
+        )
+
+    if not recs:
+        st.info("No recommendations available yet.")
+        return
+
+    st.markdown("Guidance focuses on concepts with highest combined impact (points lost × students affected), adjusted by persistence where available.")
+
+    for rec in recs:
+        with card(f"{rec['action']} {rec['concept']}", f"Impact score {rec['impact_score']:.1f} | {rec['students']} students | {rec['points_lost_total']:.1f} pts lost | persistence {rec['persistence_rate']:.0%}"):
+            st.markdown("- Suggested action: **" + rec["action"] + f" {rec['concept']}**")
+            if rec["persistence_rate"] >= 0.2:
+                st.markdown("- Rationale: recurring across exams (high persistence)")
+            else:
+                st.markdown("- Rationale: high impact despite low persistence; reinforce with practice")
+            st.markdown("- Plan: include a focused mini-lesson and formative check next week")
+
+    rec_df = pd.DataFrame(recs)
+    st.dataframe(rec_df[["concept", "action", "impact_score", "students", "points_lost_total", "persistence_rate"]], use_container_width=True, height=320)
+    _download_df("Download recommendations", rec_df, "recommendations.csv")
 
 
 def _render_persistence(df: pd.DataFrame, exam_order: List[str]):
