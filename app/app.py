@@ -130,6 +130,28 @@ def _exam_order(df: pd.DataFrame) -> List[str]:
     return unique
 
 
+def _student_filter_controls(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
+    students = sorted(df["student_id"].dropna().unique())
+    scope = st.radio("Student scope", options=["All students", "Single student", "Multi-select"], index=0, horizontal=True)
+    selected_ids: List[str] = []
+
+    if scope == "Single student":
+        if students:
+            chosen = st.selectbox("Choose a student", options=students, index=0)
+            selected_ids = [chosen]
+    elif scope == "Multi-select":
+        selected_ids = st.multiselect("Filter students (optional)", options=students, default=[])
+
+    if selected_ids:
+        filtered = df[df["student_id"].isin(selected_ids)]
+        desc = ", ".join(map(str, selected_ids))
+    else:
+        filtered = df
+        desc = "All students"
+
+    return filtered, desc
+
+
 def _download_df(label: str, df: pd.DataFrame, filename: str):
     st.download_button(label, df.to_csv(index=False).encode("utf-8"), file_name=filename, mime="text/csv")
 
@@ -229,6 +251,10 @@ def _instructor_summary(df: pd.DataFrame, errors: pd.DataFrame, persistence: pd.
 
 
 def _render_overview(df: pd.DataFrame, exam_order: List[str]):
+    if df.empty:
+        st.info("No data available for the selected students.")
+        return
+
     summary = metrics.overall_summary(df)
     errors = metrics.summarize_errors(df)
     selected = st.session_state.get("selected_rubric")
@@ -239,9 +265,17 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
         errors = errors.loc[errors["rubric_item"] == selected]
 
     total_points = filtered_df["points_lost"].sum()
+    numeric = filtered_df.copy()
+    numeric.loc[:, "points_lost"] = pd.to_numeric(numeric["points_lost"], errors="coerce")
+    per_student = numeric.groupby("student_id")["points_lost"].sum()
+    avg_per_student = per_student.mean() if not per_student.empty else 0.0
+    std_per_student = per_student.std(ddof=0) if len(per_student) > 0 else 0.0
+
     kpis = [
         {"label": "Rows", "value": f"{summary['rows']:,}"},
         {"label": "Students", "value": f"{summary['students']:,}"},
+        {"label": "Avg pts / student", "value": f"{avg_per_student:.2f}"},
+        {"label": "Std dev / student", "value": f"{std_per_student:.2f}"},
         {"label": "Exams", "value": summary["exams"], "hint": "Unique exam_id"},
         {"label": "Rubric items", "value": filtered_df["rubric_item"].nunique()},
         {"label": "Avg points lost", "value": f"{summary['avg_points_lost']:.2f}"},
@@ -433,19 +467,23 @@ def main():
     else:
         st.warning("Validation found issues; review before trusting analytics.")
 
+    section_header("Student scope", "Analyze all students or a subset")
+    filtered_df, student_scope_desc = _student_filter_controls(normalized_df)
+    st.caption(f"Student scope: {student_scope_desc}")
+
     st.write("### Preview (first 20 rows)")
-    st.dataframe(normalized_df.head(20), use_container_width=True)
+    st.dataframe(filtered_df.head(20), use_container_width=True)
 
     section_header("Step 4 — Explore")
-    exam_order = _exam_order(normalized_df)
+    exam_order = _exam_order(filtered_df)
     overview_tab, persistence_tab, quality_tab = st.tabs(["Overview", "Persistence", "Data Quality"])
 
     with overview_tab:
-        _render_overview(normalized_df, exam_order)
+        _render_overview(filtered_df, exam_order)
     with persistence_tab:
-        _render_persistence(normalized_df, exam_order)
+        _render_persistence(filtered_df, exam_order)
     with quality_tab:
-        _render_quality(normalized_df)
+        _render_quality(filtered_df)
 
 
 if __name__ == "__main__":
