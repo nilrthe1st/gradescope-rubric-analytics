@@ -532,6 +532,9 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
     _render_recommendations(df, exam_order)
 
     st.divider()
+    _render_predictive(df, exam_order)
+
+    st.divider()
     _drilldown_selector(errors)
 
     st.subheader("Charts")
@@ -597,6 +600,111 @@ def _render_misconceptions(df: pd.DataFrame):
         _download_df("Download co-occurrence pairs", top_pairs, "cooccurrence_pairs.csv")
 
 
+def _build_predictive_frames(df: pd.DataFrame, exam_order: List[str]):
+    data = df.copy()
+    data.loc[:, "rubric_item"] = data["rubric_item"].fillna("").astype(str).str.strip()
+    data.loc[:, "concept"] = data.get("concept", "").fillna("").astype(str).str.strip()
+    data.loc[:, "points_lost"] = pd.to_numeric(data["points_lost"], errors="coerce").fillna(0)
+    data.loc[:, "exam_id"] = data["exam_id"].astype(str)
+    data.loc[:, "student_id"] = data["student_id"].astype(str)
+
+    items = sorted(data["rubric_item"].unique())
+    concept_for_item = (
+        data.groupby("rubric_item")["concept"].agg(lambda s: s.mode().iat[0] if not s.mode().empty else "")
+    ).to_dict()
+
+    exam_rank = {exam: idx for idx, exam in enumerate(exam_order)}
+    training_rows = []
+    scoring_rows = []
+
+    for student_id, sub in data.groupby("student_id"):
+        exams = sorted(sub["exam_id"].unique(), key=lambda x: exam_rank.get(x, 1e9))
+        if len(exams) < 1:
+            continue
+
+        # Build cumulative prior for scoring on last exam (predict next)
+        for idx in range(1, len(exams)):
+            current_exam = exams[idx]
+            prior_exams = set(exams[:idx])
+            prior_df = sub[sub["exam_id"].isin(prior_exams)]
+            current_df = sub[sub["exam_id"] == current_exam]
+
+            current_items = set(current_df["rubric_item"].unique())
+            for item in items:
+                concept = concept_for_item.get(item, "")
+                prior_seen = 1 if item in set(prior_df["rubric_item"].unique()) else 0
+                prior_concept_pts = (
+                    prior_df.loc[prior_df["concept"] == concept, "points_lost"].sum() if concept else 0.0
+                )
+                label = 1 if item in current_items else 0
+                training_rows.append(
+                    {
+                        "student_id": student_id,
+                        "exam_id": current_exam,
+                        "rubric_item": item,
+                        "prior_seen": prior_seen,
+                        "prior_concept_points": prior_concept_pts,
+                        "label": label,
+                    }
+                )
+
+        # scoring using last known state
+        last_exam = exams[-1]
+        prior_exams = set(exams[:-1])
+        prior_df = sub[sub["exam_id"].isin(prior_exams)] if prior_exams else sub.iloc[0:0]
+        for item in items:
+            concept = concept_for_item.get(item, "")
+            prior_seen = 1 if item in set(prior_df["rubric_item"].unique()) else 0
+            prior_concept_pts = prior_df.loc[prior_df["concept"] == concept, "points_lost"].sum() if concept else 0.0
+            scoring_rows.append(
+                {
+                    "student_id": student_id,
+                    "rubric_item": item,
+                    "prior_seen": prior_seen,
+                    "prior_concept_points": prior_concept_pts,
+                }
+            )
+
+    train_df = pd.DataFrame(training_rows)
+    score_df = pd.DataFrame(scoring_rows)
+    return train_df, score_df, items
+
+
+def _predict_future_risks(df: pd.DataFrame, exam_order: List[str]):
+    try:
+        from sklearn.linear_model import LogisticRegression
+    except Exception as exc:  # pragma: no cover - defensive
+        return None, None, f"sklearn not available: {exc}"
+
+    train_df, score_df, items = _build_predictive_frames(df, exam_order)
+    if train_df.empty or score_df.empty:
+        return None, None, "Not enough exam history to train (need at least 2 exams with students)."
+
+    X = train_df[["prior_seen", "prior_concept_points"]]
+    y = train_df["label"]
+    model = LogisticRegression(max_iter=200)
+    try:
+        model.fit(X, y)
+    except Exception as exc:  # pragma: no cover - defensive
+        return None, None, f"Model training failed: {exc}"
+
+    score_probs = model.predict_proba(score_df[["prior_seen", "prior_concept_points"]])[:, 1]
+    score_df = score_df.copy()
+    score_df.loc[:, "probability"] = score_probs
+    score_df.loc[:, "confidence"] = score_df["probability"].apply(
+        lambda p: "high" if p >= 0.7 else ("medium" if p >= 0.4 else "low")
+    )
+
+    coef_df = pd.DataFrame(
+        {
+            "feature": ["prior_seen", "prior_concept_points"],
+            "coefficient": model.coef_[0],
+        }
+    )
+
+    return score_df, coef_df, None
+
+
 def _render_recommendations(df: pd.DataFrame, exam_order: List[str]):
     st.subheader("What to change next week")
 
@@ -650,6 +758,37 @@ def _render_recommendations(df: pd.DataFrame, exam_order: List[str]):
     rec_df = pd.DataFrame(recs)
     st.dataframe(rec_df[["concept", "action", "impact_score", "students", "points_lost_total", "persistence_rate"]], use_container_width=True, height=320)
     _download_df("Download recommendations", rec_df, "recommendations.csv")
+
+
+def _render_predictive(df: pd.DataFrame, exam_order: List[str]):
+    st.subheader("Predictive analytics (interpretable)")
+    st.caption("Uses logistic regression with prior misses and concept points; predictions are probabilistic and uncertain.")
+
+    score_df, coef_df, warn = _predict_future_risks(df, exam_order)
+    if warn:
+        st.info(warn)
+        return
+
+    if score_df is None or score_df.empty:
+        st.info("Not enough data to score future mistakes yet.")
+        return
+
+    st.markdown("**Model coefficients (interpretability)**")
+    if coef_df is not None and not coef_df.empty:
+        coef_df = coef_df.copy()
+        coef_df.loc[:, "coefficient"] = coef_df["coefficient"].round(3)
+        st.dataframe(coef_df, use_container_width=True, height=120)
+    else:
+        st.caption("Coefficients unavailable.")
+
+    st.markdown("**Per-student predicted risks (next exam)**")
+    risk_table = score_df.copy()
+    risk_table.loc[:, "probability"] = risk_table["probability"].round(3)
+    risk_table = risk_table.sort_values(by="probability", ascending=False)
+    st.dataframe(risk_table.head(50), use_container_width=True, height=360)
+    _download_df("Download risk table", risk_table, "predicted_risks.csv")
+
+    st.caption("Disclaimer: These probabilities are estimates based on limited history; treat as guidance, not guarantees.")
 
 
 def _render_persistence(df: pd.DataFrame, exam_order: List[str]):
