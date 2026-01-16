@@ -160,6 +160,8 @@ def group_comparison(df: pd.DataFrame, group_col: str, missing_label: str = "Una
 
     data = data.copy()
     data.loc[:, group_col] = data[group_col].fillna("").astype(str).str.strip()
+    if data[group_col].eq("").all():
+        return pd.DataFrame()
     data.loc[:, group_col] = data[group_col].replace({"": missing_label})
 
     grouped = data.groupby(group_col, dropna=False)
