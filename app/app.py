@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -27,6 +28,7 @@ from gradescope_analytics.mapping import MappingConfig, needs_mapping, suggest_m
 st.set_page_config(page_title="Gradescope Rubric Analytics", layout="wide", page_icon="📊")
 
 DATA_DIR = ROOT / "data"
+CONCEPT_MAPPING_PATH = DATA_DIR / "concept_mappings.json"
 
 
 def _rerun():
@@ -39,6 +41,29 @@ def _rerun():
         raise RuntimeError("Streamlit rerun API not available")
 
 
+def _load_concept_mapping() -> Dict[str, str]:
+    if st.session_state.get("concept_mapping") is not None:
+        return st.session_state["concept_mapping"]
+
+    mapping: Dict[str, str] = {}
+    try:
+        if CONCEPT_MAPPING_PATH.exists():
+            mapping = json.loads(CONCEPT_MAPPING_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive
+        st.warning(f"Unable to load concept mappings: {exc}")
+
+    st.session_state["concept_mapping"] = mapping
+    return mapping
+
+
+def _save_concept_mapping(mapping: Dict[str, str]):
+    try:
+        CONCEPT_MAPPING_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONCEPT_MAPPING_PATH.write_text(json.dumps(mapping, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:  # pragma: no cover - defensive
+        st.warning(f"Unable to save concept mappings: {exc}")
+
+
 def _init_state() -> None:
     defaults = {
         "demo_mode": False,
@@ -49,6 +74,7 @@ def _init_state() -> None:
         "validation_results": None,
         "selected_rubric": None,
         "source_label": None,
+        "concept_mapping": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -152,6 +178,78 @@ def _student_filter_controls(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
     return filtered, desc
 
 
+def _concept_stats(df: pd.DataFrame) -> pd.DataFrame:
+    data = df.copy()
+    data.loc[:, "concept"] = data.get("concept", "").fillna("").astype(str).str.strip()
+    data.loc[:, "points_lost"] = pd.to_numeric(data["points_lost"], errors="coerce")
+    scoped = data[data["concept"] != ""]
+    if scoped.empty:
+        return pd.DataFrame(columns=["concept", "rows", "students_affected", "points_lost_total", "points_lost_mean"])
+
+    grouped = scoped.groupby("concept", dropna=False)
+    rows = []
+    for concept, subset in grouped:
+        rows.append(
+            {
+                "concept": concept,
+                "rows": len(subset),
+                "students_affected": subset["student_id"].nunique(),
+                "points_lost_total": subset["points_lost"].sum(),
+                "points_lost_mean": subset["points_lost"].mean(),
+            }
+        )
+
+    result = pd.DataFrame(rows)
+    return result.sort_values(by="points_lost_total", ascending=False)
+
+
+def _concept_mapping_controls(df: pd.DataFrame) -> Dict[str, str]:
+    mapping = _load_concept_mapping()
+
+    has_topic_col = "topic" in df.columns
+    topic_values = df["topic"].fillna("").astype(str).str.strip() if has_topic_col else pd.Series([], dtype=str)
+    has_topic_values = has_topic_col and topic_values.str.len().gt(0).any()
+
+    if has_topic_values:
+        st.success("Using provided topic column as concept dimension.")
+        return mapping
+
+    st.info("No topic column found; map rubric items to concepts.")
+    rubric_items = sorted(df["rubric_item"].dropna().unique())
+    with st.form("concept_map_form"):
+        updated: Dict[str, str] = {}
+        for item in rubric_items:
+            default = mapping.get(item, "")
+            updated[item] = st.text_input(f"Concept for '{item}'", value=default)
+        submitted = st.form_submit_button("Save concept mapping")
+
+    if submitted:
+        cleaned = {k: v.strip() for k, v in updated.items() if v.strip()}
+        mapping.update(cleaned)
+        _save_concept_mapping(mapping)
+        st.session_state["concept_mapping"] = mapping
+        st.success("Concept mappings saved and will persist across sessions.")
+
+    return mapping
+
+
+def _apply_concepts(df: pd.DataFrame) -> pd.DataFrame:
+    mapping = _concept_mapping_controls(df)
+
+    has_topic_col = "topic" in df.columns
+    topic_values = df["topic"].fillna("").astype(str).str.strip() if has_topic_col else pd.Series("", index=df.index)
+
+    mapped_concepts = df["rubric_item"].map(mapping).fillna("")
+    concept_series = topic_values.where(topic_values != "", mapped_concepts)
+
+    result = df.copy()
+    result.loc[:, "concept"] = concept_series
+
+    missing = (result["concept"].fillna("") == "").sum()
+    st.caption(f"Concept coverage: {len(result) - missing} rows mapped, {missing} rows unmapped.")
+    return result
+
+
 def _download_df(label: str, df: pd.DataFrame, filename: str):
     st.download_button(label, df.to_csv(index=False).encode("utf-8"), file_name=filename, mime="text/csv")
 
@@ -221,12 +319,12 @@ def _instructor_summary(df: pd.DataFrame, errors: pd.DataFrame, persistence: pd.
         high_persistence = persistence[persistence["cohort_size"] >= 3].sort_values("persistence_rate", ascending=False).head(3)
         high_points = errors.sort_values("points_lost_total", ascending=False).head(3)
 
-        topic_df = df.copy()
-        topic_df.loc[:, "topic"] = topic_df["topic"].fillna("").astype(str).str.strip()
-        topic_rollup = topic_df[topic_df["topic"] != ""]
-        topic_summary = pd.DataFrame()
-        if not topic_rollup.empty:
-            topic_summary = topic_rollup.groupby("topic", dropna=False)["points_lost"].sum().reset_index().sort_values("points_lost", ascending=False).head(3)
+        concept_df = df.copy()
+        concept_df.loc[:, "concept"] = concept_df.get("concept", concept_df.get("topic", "")).fillna("").astype(str).str.strip()
+        concept_rollup = concept_df[concept_df["concept"] != ""]
+        concept_summary = pd.DataFrame()
+        if not concept_rollup.empty:
+            concept_summary = concept_rollup.groupby("concept", dropna=False)["points_lost"].sum().reset_index().sort_values("points_lost", ascending=False).head(3)
 
         st.markdown("**High-persistence rubric items**")
         if high_persistence.empty:
@@ -243,11 +341,11 @@ def _instructor_summary(df: pd.DataFrame, errors: pd.DataFrame, persistence: pd.
                 st.write(f"- {row['rubric_item']}: {row['points_lost_total']:.1f} points lost total")
 
         st.markdown("**Suggested recitation topics**")
-        if topic_summary.empty:
-            st.caption("No topic column present; add an optional topic to drive this insight.")
+        if concept_summary.empty:
+            st.caption("No concepts available; add topics or map rubric items to concepts.")
         else:
-            for _, row in topic_summary.iterrows():
-                st.write(f"- {row['topic']}: {row['points_lost']:.1f} points lost")
+            for _, row in concept_summary.iterrows():
+                st.write(f"- {row['concept']}: {row['points_lost']:.1f} points lost")
 
 
 def _render_overview(df: pd.DataFrame, exam_order: List[str]):
@@ -295,6 +393,24 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
             _download_df("Download points-lost CSV", top_by_points, "top_rubric_points.csv")
     with col_right:
         _instructor_summary(df, errors, persistence)
+
+    st.subheader("Concepts")
+    concept_stats = _concept_stats(df)
+    if concept_stats.empty:
+        st.info("Add topics or concept mappings to see concept-level analytics.")
+    else:
+        st.dataframe(concept_stats, use_container_width=True, height=260)
+        _download_df("Download concepts CSV", concept_stats, "concepts.csv")
+        concept_fig = px.bar(
+            concept_stats.sort_values("points_lost_total", ascending=False),
+            x="concept",
+            y="points_lost_total",
+            labels={"concept": "Concept", "points_lost_total": "Total points lost"},
+            title="Points lost by concept",
+        )
+        concept_fig.update_traces(hovertemplate="<b>%{x}</b><br>Total points lost: %{y}<extra></extra>")
+        _style_fig(concept_fig)
+        st.plotly_chart(concept_fig, use_container_width=True)
 
     st.divider()
     _drilldown_selector(errors)
@@ -466,6 +582,9 @@ def main():
         st.success("Validation passed")
     else:
         st.warning("Validation found issues; review before trusting analytics.")
+
+    section_header("Concept normalization", "Use topics or map rubric items to concepts")
+    normalized_df = _apply_concepts(normalized_df)
 
     section_header("Student scope", "Analyze all students or a subset")
     filtered_df, student_scope_desc = _student_filter_controls(normalized_df)
