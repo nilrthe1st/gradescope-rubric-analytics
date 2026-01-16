@@ -615,6 +615,9 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
         st.plotly_chart(concept_fig, use_container_width=True)
 
     st.divider()
+    _render_course_structure(df)
+
+    st.divider()
     _render_misconceptions(df)
 
     st.divider()

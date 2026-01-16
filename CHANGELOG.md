@@ -1,6 +1,9 @@
 # Changelog
 
 ## 2026-01-15
+- Added optional course-structure analytics: section vs section and TA vs TA disparities with downloads and bar charts.
+- Added optional section_id and ta_id handling through normalization and mapping wizard.
+- Added anonymization toggle to replace student_id/student_name with deterministic aliases across visuals and downloads.
 - Added student scope controls (all, single, multi-select) and filtering across analytics views.
 - Introduced cohort-aware KPIs (avg and std dev points lost per student) and kept instructor defaults to all students.
 - Ensured charts/tables respect student filters and preview reflects the selected cohort.
