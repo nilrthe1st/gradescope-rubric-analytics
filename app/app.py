@@ -5,6 +5,7 @@ exploration while keeping analytics logic in ``src/gradescope_analytics``.
 """
 
 import sys
+from collections import defaultdict
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -351,6 +352,16 @@ def _render_exports(df: pd.DataFrame, errors: pd.DataFrame, persistence: pd.Data
         st.warning(pdf_err)
     elif pdf_bytes:
         st.download_button("Generate instructor report (PDF)", data=pdf_bytes, file_name="instructor_report.pdf", mime="application/pdf")
+
+
+def _trajectory_stats(df: pd.DataFrame, exam_order: List[str]):
+    """Placeholder trajectory stats until upstream analytics are reintroduced.
+
+    Returns empty dataframes to keep the UI responsive even when the
+    implementation is unavailable in this build.
+    """
+
+    return pd.DataFrame(), pd.DataFrame()
 
 
 def _misconception_clusters(df: pd.DataFrame, jaccard_threshold: float = 0.2, corr_threshold: float = 0.3, min_support: int = 2):
