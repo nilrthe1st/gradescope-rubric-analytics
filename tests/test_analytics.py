@@ -5,6 +5,7 @@ from gradescope_analytics.metrics import (
     compute_persistence,
     error_by_exam,
     exam_breakdown,
+    group_comparison,
     overall_summary,
     rubric_item_stats,
     score_distribution,
@@ -79,6 +80,36 @@ def test_error_by_exam_long_format():
 
     exam2_a = result[(result["exam_id"] == "Exam2") & (result["rubric_item"] == "A")].iloc[0]
     assert exam2_a["points_lost_total"] == 3
+
+
+def test_group_comparison_section_and_ta():
+    df = pd.DataFrame(
+        [
+            {"student_id": "s1", "exam_id": "Exam1", "question_id": "Q1", "rubric_item": "A", "points_lost": 1, "topic": "T", "section_id": "S1", "ta_id": "TA1"},
+            {"student_id": "s2", "exam_id": "Exam1", "question_id": "Q2", "rubric_item": "B", "points_lost": 2, "topic": "T", "section_id": "S2", "ta_id": "TA1"},
+            {"student_id": "s3", "exam_id": "Exam2", "question_id": "Q1", "rubric_item": "A", "points_lost": 3, "topic": "T", "section_id": "S1", "ta_id": "TA2"},
+        ]
+    )
+
+    sections = group_comparison(df, "section_id")
+    assert set(sections.columns) == {
+        "section_id",
+        "rows",
+        "students",
+        "total_points_lost",
+        "avg_points_per_student",
+        "avg_points_per_row",
+    }
+    assert sections.iloc[0]["section_id"] == "S1"
+
+    tas = group_comparison(df, "ta_id")
+    assert "TA1" in tas["ta_id"].values
+    assert tas[tas["ta_id"] == "TA1"].iloc[0]["total_points_lost"] == 3
+
+
+def test_group_comparison_missing_column_returns_empty(sample_df):
+    missing = group_comparison(sample_df, "section_id")
+    assert missing.empty
 
 
 def test_compute_persistence_with_order():

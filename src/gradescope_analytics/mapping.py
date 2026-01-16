@@ -10,6 +10,8 @@ CANONICAL_COLUMNS = [
     "rubric_item",
     "points_lost",
     "topic",
+    "section_id",
+    "ta_id",
 ]
 
 REQUIRED_CANONICAL = ["student_id", "exam_id", "question_id", "rubric_item", "points_lost"]
@@ -23,6 +25,8 @@ class MappingConfig:
     rubric_item: str
     points_lost: str
     topic: Optional[str] = None
+    section_id: Optional[str] = None
+    ta_id: Optional[str] = None
 
     @classmethod
     def from_dict(cls, mapping: Dict[str, Optional[str]]) -> "MappingConfig":
@@ -36,6 +40,8 @@ class MappingConfig:
             rubric_item=mapping.get("rubric_item", ""),
             points_lost=mapping.get("points_lost", ""),
             topic=mapping.get("topic"),
+            section_id=mapping.get("section_id"),
+            ta_id=mapping.get("ta_id"),
         )
 
     def to_dict(self) -> Dict[str, Optional[str]]:
@@ -46,6 +52,8 @@ class MappingConfig:
             "rubric_item": self.rubric_item,
             "points_lost": self.points_lost,
             "topic": self.topic,
+            "section_id": self.section_id,
+            "ta_id": self.ta_id,
         }
 
 
@@ -68,6 +76,8 @@ def suggest_mapping(df: pd.DataFrame) -> Dict[str, Optional[str]]:
         "rubric_item": find_column(["rubric", "criterion", "prompt", "issue", "deduction"]),
         "points_lost": find_column(["points_lost", "points lost", "deduction", "penalty", "loss", "points"]),
         "topic": find_column(["topic", "tag", "category"]),
+        "section_id": find_column(["section", "discussion", "lecture"]),
+        "ta_id": find_column(["ta", "grader", "assistant", "gsi"]),
     }
 
 
@@ -96,6 +106,16 @@ def apply_mapping(df: pd.DataFrame, mapping: MappingConfig) -> pd.DataFrame:
     else:
         normalized["topic"] = ""
 
+    if mapping.section_id and mapping.section_id in df.columns:
+        normalized["section_id"] = df[mapping.section_id].astype(str).str.strip()
+    else:
+        normalized["section_id"] = ""
+
+    if mapping.ta_id and mapping.ta_id in df.columns:
+        normalized["ta_id"] = df[mapping.ta_id].astype(str).str.strip()
+    else:
+        normalized["ta_id"] = ""
+
     for col in REQUIRED_CANONICAL:
         if normalized[col].isna().any() or (normalized[col].astype(str).str.strip() == "").any():
             raise ValueError(f"Missing required values in '{col}'")
@@ -116,6 +136,11 @@ def ensure_canonical_columns(df: pd.DataFrame) -> pd.DataFrame:
         df_copy.loc[:, col] = df_copy[col].astype(str).str.strip()
         if (df_copy[col] == "").any():
             raise ValueError(f"Missing required values in '{col}'")
+
+    for optional_col in ["topic", "section_id", "ta_id"]:
+        if optional_col not in df_copy.columns:
+            df_copy[optional_col] = ""
+        df_copy.loc[:, optional_col] = df_copy[optional_col].fillna("").astype(str).str.strip()
 
     points = pd.to_numeric(df_copy["points_lost"], errors="coerce")
     if points.isna().any():

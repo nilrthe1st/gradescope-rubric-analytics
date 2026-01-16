@@ -147,6 +147,43 @@ def error_by_exam(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def group_comparison(df: pd.DataFrame, group_col: str, missing_label: str = "Unassigned") -> pd.DataFrame:
+    """Aggregate points lost by a grouping column (e.g., section_id or ta_id).
+
+    Returns rows with counts, students affected, and average points lost per student.
+    Missing or blank group labels are mapped to ``missing_label``.
+    """
+
+    data = _cast_numeric(ensure_canonical_columns(df))
+    if group_col not in data.columns:
+        return pd.DataFrame()
+
+    data = data.copy()
+    data.loc[:, group_col] = data[group_col].fillna("").astype(str).str.strip()
+    data.loc[:, group_col] = data[group_col].replace({"": missing_label})
+
+    grouped = data.groupby(group_col, dropna=False)
+    rows = []
+    for group_value, subset in grouped:
+        students = subset["student_id"].nunique()
+        total = subset["points_lost"].sum()
+        rows.append(
+            {
+                group_col: group_value,
+                "rows": len(subset),
+                "students": students,
+                "total_points_lost": total,
+                "avg_points_per_student": total / students if students else 0.0,
+                "avg_points_per_row": subset["points_lost"].mean(),
+            }
+        )
+
+    result = pd.DataFrame(rows)
+    if not result.empty:
+        result = result.sort_values(by="avg_points_per_student", ascending=False)
+    return result
+
+
 def compute_persistence(df: pd.DataFrame, exam_order: Optional[Iterable[str]] = None) -> pd.DataFrame:
     """Compute persistence of rubric issues across exams.
 

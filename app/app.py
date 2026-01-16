@@ -76,6 +76,7 @@ def _init_state() -> None:
         "selected_rubric": None,
         "source_label": None,
         "concept_mapping": None,
+        "anonymize_ids": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -118,6 +119,24 @@ def _mapping_wizard(df: pd.DataFrame) -> Optional[MappingConfig]:
                 topic_index = optional_cols.index(suggested_topic)
             topic = st.selectbox("topic (optional)", options=optional_cols, index=topic_index)
 
+            section_idx = 0
+            saved_section = saved.get("section_id")
+            suggested_section = suggested.get("section_id")
+            if saved_section in optional_cols:
+                section_idx = optional_cols.index(saved_section)
+            elif suggested_section in optional_cols:
+                section_idx = optional_cols.index(suggested_section)
+            section_id = st.selectbox("section_id (optional)", options=optional_cols, index=section_idx)
+
+            ta_idx = 0
+            saved_ta = saved.get("ta_id")
+            suggested_ta = suggested.get("ta_id")
+            if saved_ta in optional_cols:
+                ta_idx = optional_cols.index(saved_ta)
+            elif suggested_ta in optional_cols:
+                ta_idx = optional_cols.index(suggested_ta)
+            ta_id = st.selectbox("ta_id (optional)", options=optional_cols, index=ta_idx)
+
         submitted = st.form_submit_button("Apply mapping")
 
     if not submitted:
@@ -130,6 +149,8 @@ def _mapping_wizard(df: pd.DataFrame) -> Optional[MappingConfig]:
         "rubric_item": rubric_item,
         "points_lost": points_lost,
         "topic": topic if topic else None,
+        "section_id": section_id if section_id else None,
+        "ta_id": ta_id if ta_id else None,
     }
 
     try:
@@ -177,6 +198,22 @@ def _student_filter_controls(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
         desc = "All students"
 
     return filtered, desc
+
+
+def _maybe_anonymize_students(df: pd.DataFrame, enabled: bool) -> pd.DataFrame:
+    if not enabled:
+        return df
+
+    data = df.copy()
+    original_ids = data["student_id"].astype(str)
+    ids = sorted(original_ids.unique())
+    mapping = {sid: f"Student {idx + 1:03d}" for idx, sid in enumerate(ids)}
+    data.loc[:, "student_id"] = original_ids.map(mapping)
+
+    if "student_name" in data.columns:
+        data.loc[:, "student_name"] = original_ids.map(mapping).fillna("")
+
+    return data
 
 
 def _concept_stats(df: pd.DataFrame) -> pd.DataFrame:
@@ -241,6 +278,58 @@ def _concept_persistence(df: pd.DataFrame, exam_order: List[str]) -> pd.DataFram
     if not result.empty:
         result = result.sort_values(by="persistence_rate", ascending=False)
     return result
+
+
+def _course_group_stats(df: pd.DataFrame, group_col: str, label: str) -> pd.DataFrame:
+    stats = metrics.group_comparison(df, group_col, missing_label=f"Unassigned {label}")
+    if stats.empty:
+        return stats
+
+    stats = stats.copy()
+    stats.loc[:, "avg_points_per_student"] = stats["avg_points_per_student"].round(2)
+    stats.loc[:, "avg_points_per_row"] = stats["avg_points_per_row"].round(2)
+    stats.loc[:, "total_points_lost"] = stats["total_points_lost"].round(2)
+    return stats
+
+
+def _render_course_structure(df: pd.DataFrame):
+    st.subheader("Course structure disparities")
+
+    section_stats = _course_group_stats(df, "section_id", "section")
+    ta_stats = _course_group_stats(df, "ta_id", "TA")
+
+    if section_stats.empty and ta_stats.empty:
+        st.info("Include optional section_id or ta_id columns to compare grading patterns across sections and TAs.")
+        return
+
+    col_left, col_right = st.columns(2)
+
+    def _render_group(label: str, stats: pd.DataFrame, column_name: str, filename: str):
+        st.markdown(f"**{label} vs {label.lower()}**")
+        if stats.empty:
+            st.caption(f"Add {column_name} to see {label.lower()} comparisons.")
+            return
+
+        gap = stats["avg_points_per_student"].max() - stats["avg_points_per_student"].min()
+        st.caption(f"Disparity (max - min avg pts/student): {gap:.2f}")
+        st.dataframe(stats, use_container_width=True, height=280)
+        _download_df(f"Download {filename}", stats, filename)
+
+        fig = px.bar(
+            stats,
+            x=column_name,
+            y="avg_points_per_student",
+            labels={column_name: label, "avg_points_per_student": "Avg points lost / student"},
+            title=f"{label} disparities",
+        )
+        fig.update_traces(hovertemplate=f"<b>%{{x}}</b><br>Avg pts/student: %{{y}}<extra></extra>")
+        _style_fig(fig)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_left:
+        _render_group("Section", section_stats, "section_id", "section_comparison.csv")
+    with col_right:
+        _render_group("TA", ta_stats, "ta_id", "ta_comparison.csv")
 
 
 def _misconception_clusters(df: pd.DataFrame, jaccard_threshold: float = 0.2, corr_threshold: float = 0.3, min_support: int = 2):
@@ -911,6 +1000,15 @@ def main():
     st.sidebar.write("Upload a CSV or toggle demo mode to load the included sample.")
     demo_mode = st.sidebar.toggle("Demo mode", value=st.session_state["demo_mode"], help="Load sample_truth.csv for a quick tour")
     st.session_state["demo_mode"] = demo_mode
+
+    anonymize_default = st.session_state.get("anonymize_ids", False)
+    anonymize_ids = st.sidebar.toggle(
+        "Anonymize student IDs",
+        value=anonymize_default,
+        help="Replace student_id values with deterministic aliases across all visuals and downloads.",
+    )
+    st.session_state["anonymize_ids"] = anonymize_ids
+
     uploader = st.sidebar.file_uploader("Upload rubric CSV", type=["csv"])
 
     raw_df, source_label = _load_source(demo_mode, uploader)
@@ -964,6 +1062,11 @@ def main():
 
     section_header("Concept normalization", "Use topics or map rubric items to concepts")
     normalized_df = _apply_concepts(normalized_df)
+
+    anonymize_ids = st.session_state.get("anonymize_ids", False)
+    normalized_df = _maybe_anonymize_students(normalized_df, anonymize_ids)
+    if anonymize_ids:
+        st.caption("Student identifiers are anonymized across all charts and downloads.")
 
     section_header("Student scope", "Analyze all students or a subset")
     filtered_df, student_scope_desc = _student_filter_controls(normalized_df)

@@ -6,7 +6,16 @@ from gradescope_analytics.io import normalize_dataframe
 from gradescope_analytics.mapping import MappingConfig, needs_mapping, suggest_mapping
 
 
-CANONICAL_COLUMNS = ["student_id", "exam_id", "question_id", "rubric_item", "points_lost", "topic"]
+CANONICAL_COLUMNS = [
+    "student_id",
+    "exam_id",
+    "question_id",
+    "rubric_item",
+    "points_lost",
+    "topic",
+    "section_id",
+    "ta_id",
+]
 
 
 def test_suggest_mapping_identifies_columns(sample_df):
