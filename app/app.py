@@ -451,11 +451,15 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
 
 
 def _render_persistence(df: pd.DataFrame, exam_order: List[str]):
+    if len(exam_order) < 2:
+        st.info("Need at least two exams to compute persistence and trajectories.")
+        return
+
     persistence = metrics.compute_persistence(df, exam_order=exam_order)
     persistence = persistence.sort_values(by="persistence_rate", ascending=False)
 
     with card("Persistence by rubric item"):
-        st.dataframe(persistence, use_container_width=True, height=360)
+        st.dataframe(persistence, use_container_width=True, height=260)
         _download_df("Download persistence (CSV)", persistence, "persistence.csv")
 
     st.subheader("Rubric occurrences by exam")
@@ -483,6 +487,40 @@ def _render_persistence(df: pd.DataFrame, exam_order: List[str]):
     )
     st.plotly_chart(heatmap, use_container_width=True)
     _download_fig("Download heatmap (PNG)", heatmap, "rubric_exam_heatmap.png")
+
+    item_stats, transition_df = _trajectory_stats(df, exam_order)
+
+    st.subheader("Trajectory analytics")
+    if item_stats.empty:
+        st.info("No transitions available to compute persistence/drop-off/emergence.")
+    else:
+        st.dataframe(item_stats, use_container_width=True, height=280)
+        _download_df("Download trajectory stats (CSV)", item_stats, "trajectory_stats.csv")
+
+    st.subheader("Most likely future mistakes given current mistake")
+    if transition_df.empty:
+        st.info("No transitions available to compute conditional probabilities.")
+    else:
+        top_transitions = transition_df.head(20).copy()
+        top_transitions.loc[:, "conditional_prob"] = top_transitions["conditional_prob"].round(3)
+        st.dataframe(top_transitions, use_container_width=True, height=320)
+        _download_df("Download transitions (CSV)", top_transitions, "transitions.csv")
+
+        nodes = sorted(set(top_transitions["source"]).union(set(top_transitions["target"])))
+        node_index = {name: idx for idx, name in enumerate(nodes)}
+        sankey = dict(
+            type="sankey",
+            arrangement="snap",
+            node=dict(label=nodes, pad=15, thickness=15, line=dict(color="#444", width=0.5)),
+            link=dict(
+                source=[node_index[s] for s in top_transitions["source"]],
+                target=[node_index[t] for t in top_transitions["target"]],
+                value=top_transitions["count"],
+                color=["rgba(34,99,235,0.5)" for _ in range(len(top_transitions))],
+            ),
+        )
+        fig = dict(data=[sankey], layout=dict(title="Transitions A → B", font=dict(color="#e5e7eb")))
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_quality(df: pd.DataFrame):
