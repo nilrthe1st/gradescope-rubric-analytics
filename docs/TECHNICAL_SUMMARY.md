@@ -2,6 +2,7 @@
 
 ## New analytics added
 - Concept-level rollups (points lost, students affected) with bar visualizations and downloads.
+- Concept mapping layer with validated rubric→concept store persisted to JSON; unmapped items are surfaced and warned in UI.
 - Persistence and trajectory analytics across exams: item persistence, drop-off/emergence, conditional mistake transitions (Sankey), and trajectory stats.
 - Misconception clustering via rubric-item co-occurrence (Jaccard/correlation) with cluster cards and pair tables.
 - Instructor recommendations prioritizing concepts by impact (points lost × students affected) and persistence, with action guidance and downloads.
@@ -11,6 +12,7 @@
 
 ## New data requirements
 - Canonical schema now includes optional `topic`, `section_id`, and `ta_id` columns; required: `student_id`, `exam_id`, `question_id`, `rubric_item`, `points_lost`.
+- Concept mapping can be defined via `topic` or rubric→concept mapping UI; invalid placeholders (yes/true/none/empty) are rejected. Unmapped rows are labeled `Unmapped` and excluded from recommendations by default.
 - For predictive analytics, at least two exams per student are needed to train and score future mistake probabilities.
 - Concept mappings can be supplied via `topic` column or interactive rubric→concept mapping persisted to JSON.
 
@@ -29,6 +31,7 @@
 - Course-structure comparisons do not include statistical significance or confidence intervals; small-section volatility not flagged automatically.
 - PDF generation depends on optional `reportlab`; if missing, only CSV/PNG exports function.
 - Concept mapping completeness drives many analytics; unmapped rubric items reduce usefulness of concept-level views.
+	- Recommendations skip `Unmapped` unless the user opts in; UI warns when Unmapped rows exist.
 
 ## Suggested next research directions
 - Add calibration and uncertainty estimates for the predictive model (Platt scaling/temperature scaling, bootstrapped confidence).

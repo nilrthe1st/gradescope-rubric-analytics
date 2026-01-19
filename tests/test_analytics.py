@@ -12,6 +12,7 @@ from gradescope_analytics.metrics import (
     summarize_errors,
     student_summary,
 )
+from gradescope_analytics.recommendations import compute_recommendations
 
 
 def test_overall_summary(sample_df):
@@ -140,12 +141,26 @@ def test_compute_persistence_with_order():
 
 def test_compute_persistence_truth_dataset(sample_df):
     result = compute_persistence(sample_df)
+    # no zero-cohort rows
+    assert (result["cohort_size"] > 0).all()
+
     arrow = result[result["rubric_item"] == "Arrow direction"].iloc[0]
     assert arrow["cohort_size"] == 2
     assert arrow["repeated"] == 2
     assert arrow["persistence_rate"] == 1.0
+    assert not result[result["rubric_item"] == "Wrong nucleophile"].any().any()
 
-    wrong = result[result["rubric_item"] == "Wrong nucleophile"].iloc[0]
-    assert wrong["cohort_size"] == 0
-    assert wrong["repeated"] == 0
-    assert wrong["persistence_rate"] == 0
+
+def test_compute_recommendations_filters_disallowed_concepts():
+    df = pd.DataFrame(
+        [
+            {"student_id": "s1", "exam_id": "Exam1", "question_id": "Q1", "rubric_item": "A", "points_lost": 2, "concept": "Allowed"},
+            {"student_id": "s2", "exam_id": "Exam1", "question_id": "Q2", "rubric_item": "B", "points_lost": 3, "concept": "Blocked"},
+            {"student_id": "s1", "exam_id": "Exam2", "question_id": "Q1", "rubric_item": "A", "points_lost": 1, "concept": "Allowed"},
+        ]
+    )
+
+    recs = compute_recommendations(df, exam_order=["Exam1", "Exam2"], allowed_concepts=["Allowed"], top_n=5)
+    assert not recs.empty
+    assert set(recs["concept"]) == {"Allowed"}
+    assert "Blocked" not in set(recs["concept"])

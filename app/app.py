@@ -26,8 +26,10 @@ for path in (ROOT, SRC):
 
 from app.ui import AppShell, Step, card, kpi_row, section_header, stepper  # noqa: E402
 from gradescope_analytics import invariants, metrics  # noqa: E402
+from gradescope_analytics.concepts import apply_concept_column, load_concept_mapping, save_concept_mapping, unmapped_count  # noqa: E402
 from gradescope_analytics.io import normalize_dataframe  # noqa: E402
 from gradescope_analytics.mapping import MappingConfig, needs_mapping, suggest_mapping  # noqa: E402
+from gradescope_analytics.recommendations import compute_recommendations  # noqa: E402
 
 st.set_page_config(page_title="Gradescope Rubric Analytics", layout="wide", page_icon="📊")
 
@@ -51,8 +53,7 @@ def _load_concept_mapping() -> Dict[str, str]:
 
     mapping: Dict[str, str] = {}
     try:
-        if CONCEPT_MAPPING_PATH.exists():
-            mapping = json.loads(CONCEPT_MAPPING_PATH.read_text(encoding="utf-8"))
+        mapping = load_concept_mapping(CONCEPT_MAPPING_PATH)
     except Exception as exc:  # pragma: no cover - defensive
         st.warning(f"Unable to load concept mappings: {exc}")
 
@@ -62,8 +63,8 @@ def _load_concept_mapping() -> Dict[str, str]:
 
 def _save_concept_mapping(mapping: Dict[str, str]):
     try:
-        CONCEPT_MAPPING_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONCEPT_MAPPING_PATH.write_text(json.dumps(mapping, indent=2, ensure_ascii=False), encoding="utf-8")
+        saved = save_concept_mapping(mapping, CONCEPT_MAPPING_PATH)
+        st.session_state["concept_mapping"] = saved
     except Exception as exc:  # pragma: no cover - defensive
         st.warning(f"Unable to save concept mappings: {exc}")
 
@@ -448,39 +449,55 @@ def _concept_mapping_controls(df: pd.DataFrame) -> Dict[str, str]:
         st.success("Using provided topic column as concept dimension.")
         return mapping
 
-    st.info("No topic column found; map rubric items to concepts.")
-    rubric_items = sorted(df["rubric_item"].dropna().unique())
-    with st.form("concept_map_form"):
-        updated: Dict[str, str] = {}
-        for item in rubric_items:
-            default = mapping.get(item, "")
-            updated[item] = st.text_input(f"Concept for '{item}'", value=default)
-        submitted = st.form_submit_button("Save concept mapping")
+    st.info("No topic column found or it is blank; map rubric items to concepts.")
+    rubric_items = sorted(df["rubric_item"].dropna().astype(str).str.strip().unique())
 
-    if submitted:
-        cleaned = {k: v.strip() for k, v in updated.items() if v.strip()}
-        mapping.update(cleaned)
-        _save_concept_mapping(mapping)
-        st.session_state["concept_mapping"] = mapping
-        st.success("Concept mappings saved and will persist across sessions.")
+    search = st.text_input("Filter rubric items", value="", placeholder="Search rubric items")
+    filtered_items = [item for item in rubric_items if search.lower() in item.lower()]
 
-    return mapping
+    concept_suggestions = sorted({c for c in mapping.values() if c})
+    table_data = pd.DataFrame(
+        {
+            "rubric_item": filtered_items,
+            "concept": [mapping.get(item, "") for item in filtered_items],
+        }
+    )
+
+    edited = st.data_editor(
+        table_data,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "rubric_item": st.column_config.TextColumn("Rubric item", width="medium", disabled=True),
+            "concept": st.column_config.TextColumn("Concept", help="Type a concept or pick an existing one", autocomplete=concept_suggestions),
+        },
+        num_rows="fixed",
+    )
+
+    if st.button("Save concept mapping"):
+        updated = {item: str(concept).strip() for item, concept in zip(edited["rubric_item"], edited["concept"]) if str(concept).strip()}
+        merged = {**mapping, **updated}
+        merged = {k: v for k, v in merged.items() if v}
+        try:
+            saved = save_concept_mapping(merged, CONCEPT_MAPPING_PATH)
+            st.session_state["concept_mapping"] = saved
+            st.success("Concept mappings saved and will persist across sessions.")
+        except Exception as exc:
+            st.error(f"Unable to save mapping: {exc}")
+
+    return st.session_state.get("concept_mapping", mapping)
 
 
 def _apply_concepts(df: pd.DataFrame) -> pd.DataFrame:
     mapping = _concept_mapping_controls(df)
+    result = apply_concept_column(df, mapping, unmapped_label="Unmapped")
 
-    has_topic_col = "topic" in df.columns
-    topic_values = df["topic"].fillna("").astype(str).str.strip() if has_topic_col else pd.Series("", index=df.index)
-
-    mapped_concepts = df["rubric_item"].map(mapping).fillna("")
-    concept_series = topic_values.where(topic_values != "", mapped_concepts)
-
-    result = df.copy()
-    result.loc[:, "concept"] = concept_series
-
-    missing = (result["concept"].fillna("") == "").sum()
-    st.caption(f"Concept coverage: {len(result) - missing} rows mapped, {missing} rows unmapped.")
+    missing = unmapped_count(result, unmapped_label="Unmapped")
+    if missing > 0:
+        st.warning(
+            f"{missing} rows are Unmapped. Recommendations exclude 'Unmapped' by default. Add topics or map rubric items to improve coverage."
+        )
+    st.caption(f"Concept coverage: {len(result) - missing} rows mapped, {missing} rows Unmapped.")
     return result
 
 
@@ -665,7 +682,13 @@ def _instructor_summary(df: pd.DataFrame, errors: pd.DataFrame, persistence: pd.
                 st.write(f"- {row['concept']}: {row['points_lost']:.1f} points lost")
 
 
-def _render_overview(df: pd.DataFrame, exam_order: List[str]):
+def _render_overview(
+    df: pd.DataFrame,
+    exam_order: List[str],
+    allowed_concepts: List[str],
+    include_unmapped: bool,
+    personal_mode: bool = False,
+):
     if df.empty:
         st.info("No data available for the selected students.")
         return
@@ -709,7 +732,10 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
             st.dataframe(top_by_points, use_container_width=True, height=280)
             _download_df("Download points-lost CSV", top_by_points, "top_rubric_points.csv")
     with col_right:
-        _instructor_summary(df, errors, persistence)
+        if personal_mode:
+            st.info("Personal mode: instructor summaries are hidden when fewer than 5 students are present.")
+        else:
+            _instructor_summary(df, errors, persistence)
 
     st.subheader("Concepts")
     concept_stats = _concept_stats(df)
@@ -736,10 +762,18 @@ def _render_overview(df: pd.DataFrame, exam_order: List[str]):
     _render_misconceptions(df)
 
     st.divider()
-    rec_df = _render_recommendations(df, exam_order)
+    rec_df = None
+    if personal_mode:
+        st.info("Recommendations hidden in personal mode (fewer than 5 students).")
+    else:
+        rec_df = _render_recommendations(df, exam_order, allowed_concepts, include_unmapped)
 
     st.divider()
-    _render_exports(df, errors, persistence, rec_df)
+    if personal_mode:
+        st.info("Exports are limited in personal mode; instructor reports are hidden when the dataset is very small.")
+        _render_exports(df, errors, persistence, None)
+    else:
+        _render_exports(df, errors, persistence, rec_df)
 
     st.divider()
     _render_predictive(df, exam_order)
@@ -915,54 +949,28 @@ def _predict_future_risks(df: pd.DataFrame, exam_order: List[str]):
     return score_df, coef_df, None
 
 
-def _compute_recommendations(df: pd.DataFrame, exam_order: List[str]):
+def _render_recommendations(df: pd.DataFrame, exam_order: List[str], allowed_concepts: List[str], include_unmapped: bool):
     st.subheader("What to change next week")
 
-    concept_stats = _concept_stats(df)
-    if concept_stats.empty:
-        st.info("No concept data available yet; add topics or concept mappings.")
-        return []
-
-    concept_stats = concept_stats.copy()
-    concept_stats.loc[:, "impact_score"] = concept_stats["points_lost_total"] * concept_stats["students_affected"].clip(lower=1)
-    concept_stats = concept_stats.sort_values(by="impact_score", ascending=False)
-
-    concept_persist = _concept_persistence(df, exam_order)
-    if concept_persist.empty:
-        concept_persist = pd.DataFrame(columns=["concept", "persistence_rate"])
-
-    recs = []
-    for _, row in concept_stats.head(5).iterrows():
-        concept = row["concept"]
-        rate = float(concept_persist[concept_persist["concept"] == concept]["persistence_rate"].fillna(0).values[0]) if not concept_persist.empty else 0.0
-        students = int(row["students_affected"])
-        pts = float(row["points_lost_total"])
-        impact = float(row["impact_score"])
-        action = "Re-teach" if rate >= 0.2 else "Add practice for"
-        recs.append(
-            {
-                "concept": concept,
-                "action": action,
-                "impact_score": impact,
-                "students": students,
-                "points_lost_total": pts,
-                "persistence_rate": rate,
-            }
-        )
-
-    return recs
-
-
-def _render_recommendations(df: pd.DataFrame, exam_order: List[str]):
-    recs = _compute_recommendations(df, exam_order)
-
-    if not recs:
+    rec_df = compute_recommendations(
+        df,
+        exam_order=exam_order,
+        allowed_concepts=allowed_concepts,
+        top_n=5,
+        include_unmapped=include_unmapped,
+        unmapped_label="Unmapped",
+    )
+    if rec_df.empty:
+        st.info("No valid concepts available for recommendations; add topics or concept mappings.")
         return None
 
     st.markdown("Guidance focuses on concepts with highest combined impact (points lost × students affected), adjusted by persistence where available.")
 
-    for rec in recs:
-        with card(f"{rec['action']} {rec['concept']}", f"Impact score {rec['impact_score']:.1f} | {rec['students']} students | {rec['points_lost_total']:.1f} pts lost | persistence {rec['persistence_rate']:.0%}"):
+    for rec in rec_df.to_dict("records"):
+        with card(
+            f"{rec['action']} {rec['concept']}",
+            f"Impact score {rec['impact_score']:.1f} | {rec['students']} students | {rec['points_lost_total']:.1f} pts lost | persistence {rec['persistence_rate']:.0%}",
+        ):
             st.markdown("- Suggested action: **" + rec["action"] + f" {rec['concept']}**")
             if rec["persistence_rate"] >= 0.2:
                 st.markdown("- Rationale: recurring across exams (high persistence)")
@@ -970,7 +978,6 @@ def _render_recommendations(df: pd.DataFrame, exam_order: List[str]):
                 st.markdown("- Rationale: high impact despite low persistence; reinforce with practice")
             st.markdown("- Plan: include a focused mini-lesson and formative check next week")
 
-    rec_df = pd.DataFrame(recs)
     st.dataframe(rec_df[["concept", "action", "impact_score", "students", "points_lost_total", "persistence_rate"]], use_container_width=True, height=320)
     _download_df("Download recommendations", rec_df, "recommendations.csv")
     return rec_df
@@ -1007,7 +1014,10 @@ def _render_predictive(df: pd.DataFrame, exam_order: List[str]):
     st.caption("Disclaimer: These probabilities are estimates based on limited history; treat as guidance, not guarantees.")
 
 
-def _render_persistence(df: pd.DataFrame, exam_order: List[str]):
+def _render_persistence(df: pd.DataFrame, exam_order: List[str], personal_mode: bool = False):
+    if personal_mode:
+        st.info("Persistence is hidden in personal mode (fewer than 5 students).")
+        return
     if len(exam_order) < 2:
         st.info("Need at least two exams to compute persistence and trajectories.")
         return
@@ -1198,9 +1208,27 @@ def main():
     if anonymize_ids:
         st.caption("Student identifiers are anonymized across all charts and downloads.")
 
+    include_unmapped = st.checkbox(
+        "Include 'Unmapped' concepts in recommendations",
+        value=False,
+        help="Turn off to keep recommendations focused on mapped concepts."
+    )
+
+    allowed_concepts = [
+        c
+        for c in normalized_df.get("concept", pd.Series([], dtype=str)).fillna("").astype(str).str.strip().unique()
+        if c and (include_unmapped or c != "Unmapped")
+    ]
+    allowed_concepts = sorted(allowed_concepts)
+
     section_header("Student scope", "Analyze all students or a subset")
     filtered_df, student_scope_desc = _student_filter_controls(normalized_df)
     st.caption(f"Student scope: {student_scope_desc}")
+
+    student_count = filtered_df["student_id"].nunique()
+    personal_mode = student_count < 5
+    if personal_mode:
+        st.warning("Personal mode: fewer than 5 students detected. Instructor-only analytics are hidden to reduce re-identification risk.")
 
     st.write("### Preview (first 20 rows)")
     st.dataframe(filtered_df.head(20), use_container_width=True)
@@ -1210,9 +1238,9 @@ def main():
     overview_tab, persistence_tab, quality_tab = st.tabs(["Overview", "Persistence", "Data Quality"])
 
     with overview_tab:
-        _render_overview(filtered_df, exam_order)
+        _render_overview(filtered_df, exam_order, allowed_concepts, include_unmapped, personal_mode=personal_mode)
     with persistence_tab:
-        _render_persistence(filtered_df, exam_order)
+        _render_persistence(filtered_df, exam_order, personal_mode=personal_mode)
     with quality_tab:
         _render_quality(filtered_df)
 

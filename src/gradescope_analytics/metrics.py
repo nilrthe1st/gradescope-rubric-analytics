@@ -240,6 +240,7 @@ def compute_persistence(df: pd.DataFrame, exam_order: Optional[Iterable[str]] = 
 
     result = pd.DataFrame(rows)
     if not result.empty:
+        result = result[result["cohort_size"] > 0]
         result = result.sort_values(by="rubric_item")
     return result
 
