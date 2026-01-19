@@ -484,11 +484,26 @@ def _apply_concepts(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _download_df(label: str, df: pd.DataFrame, filename: str):
-    n = st.session_state.get('_dl_counter', 0)
-    st.session_state['_dl_counter'] = n + 1
-    st.download_button(label, df.to_csv(index=False, key=f\"dl_{filename}_{n}\").encode("utf-8"), file_name=filename, mime="text/csv", key=f"dl_csv_{filename}_{abs(hash(label))}")
+def _download_df(label, df, filename, mime="text/csv"):
+    """Download a dataframe with a guaranteed-unique Streamlit widget key."""
+    import uuid
+    import streamlit as st
 
+    # Streamlit requires unique widget keys across reruns and codepaths.
+    ctr = st.session_state.get("_dl_counter", 0) + 1
+    st.session_state["_dl_counter"] = ctr
+
+    key = f"dl:{filename}:{ctr}:{uuid.uuid4().hex}"
+    data = df.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        label=label,
+        data=data,
+        file_name=filename,
+        mime=mime,
+        key=key,
+        use_container_width=False,
+    )
 
 def _download_fig(label: str, fig, filename: str):
     if fig is None or not fig.data:
