@@ -30,6 +30,7 @@ from gradescope_analytics.concepts import apply_concept_column, load_concept_map
 from gradescope_analytics.io import normalize_dataframe  # noqa: E402
 from gradescope_analytics.mapping import MappingConfig, needs_mapping, suggest_mapping  # noqa: E402
 from gradescope_analytics.recommendations import compute_recommendations  # noqa: E402
+from tools.generate_synthetic import generate_synthetic_dataset  # noqa: E402
 
 st.set_page_config(page_title="Gradescope Rubric Analytics", layout="wide", page_icon="📊")
 
@@ -72,6 +73,7 @@ def _save_concept_mapping(mapping: Dict[str, str]):
 def _init_state() -> None:
     defaults = {
         "demo_mode": False,
+        "synthetic_mode": False,
         "raw_df": None,
         "normalized_df": None,
         "mapping_cfg": None,
@@ -87,7 +89,22 @@ def _init_state() -> None:
             st.session_state[key] = val
 
 
-def _load_source(demo_mode: bool, upload) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+def _load_source(demo_mode: bool, synthetic_mode: bool, upload) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    if synthetic_mode:
+        synthetic_path = DATA_DIR / "synthetic_class.csv"
+        template = DATA_DIR / "sample_truth.csv"
+        if not synthetic_path.exists():
+            try:
+                generate_synthetic_dataset(template, synthetic_path, n_students=80)
+            except Exception as exc:  # pragma: no cover - defensive
+                st.error(f"Synthetic dataset generation failed: {exc}")
+                return None, None
+        try:
+            return pd.read_csv(synthetic_path), "Synthetic dataset (synthetic_class.csv)"
+        except Exception as exc:  # pragma: no cover - defensive
+            st.error(f"Unable to load synthetic dataset: {exc}")
+            return None, None
+
     if demo_mode:
         return pd.read_csv(DATA_DIR / "sample_truth.csv"), "Demo dataset (sample_truth.csv)"
     if upload is not None:
@@ -1137,8 +1154,19 @@ def main():
     shell.layout()
 
     st.sidebar.header("Data source")
-    st.sidebar.write("Upload a CSV or toggle demo mode to load the included sample.")
+    st.sidebar.write("Upload a CSV, toggle demo mode, or use a synthetic demo dataset.")
+    synthetic_mode = st.sidebar.toggle(
+        "Use synthetic demo dataset",
+        value=st.session_state.get("synthetic_mode", False),
+        help="Generate/load a synthetic class with 80 students across existing exams",
+    )
+    if synthetic_mode:
+        st.session_state["demo_mode"] = False
+    st.session_state["synthetic_mode"] = synthetic_mode
+
     demo_mode = st.sidebar.toggle("Demo mode", value=st.session_state["demo_mode"], help="Load sample_truth.csv for a quick tour")
+    if demo_mode:
+        st.session_state["synthetic_mode"] = False
     st.session_state["demo_mode"] = demo_mode
 
     anonymize_default = st.session_state.get("anonymize_ids", False)
@@ -1151,7 +1179,7 @@ def main():
 
     uploader = st.sidebar.file_uploader("Upload rubric CSV", type=["csv"])
 
-    raw_df, source_label = _load_source(demo_mode, uploader)
+    raw_df, source_label = _load_source(demo_mode, synthetic_mode, uploader)
     if raw_df is not None:
         if source_label != st.session_state.get("source_label"):
             st.session_state["mapping_cfg"] = None
@@ -1162,6 +1190,9 @@ def main():
         st.session_state["source_label"] = source_label
     if source_label:
         st.sidebar.success(source_label)
+
+    if synthetic_mode:
+        st.info("Synthetic demo mode: all data shown below is randomly generated for illustration only.")
 
     raw_df = st.session_state.get("raw_df")
     mapping_cfg: Optional[MappingConfig] = st.session_state.get("mapping_cfg")
