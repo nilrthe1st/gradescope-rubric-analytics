@@ -40,7 +40,7 @@ def _rerun():
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
+        st.rerun()
     else:  # pragma: no cover - defensive
         raise RuntimeError("Streamlit rerun API not available")
 
@@ -485,7 +485,9 @@ def _apply_concepts(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _download_df(label: str, df: pd.DataFrame, filename: str):
-    st.download_button(label, df.to_csv(index=False).encode("utf-8"), file_name=filename, mime="text/csv")
+    n = st.session_state.get('_dl_counter', 0)
+    st.session_state['_dl_counter'] = n + 1
+    st.download_button(label, df.to_csv(index=False, key=f\"dl_{filename}_{n}\").encode("utf-8"), file_name=filename, mime="text/csv", key=f"dl_csv_{filename}_{abs(hash(label))}")
 
 
 def _download_fig(label: str, fig, filename: str):
@@ -494,7 +496,7 @@ def _download_fig(label: str, fig, filename: str):
         return
     try:
         payload = fig.to_image(format="png")
-        st.download_button(label, payload, file_name=filename, mime="image/png")
+        st.download_button(label, payload, file_name=filename, mime="image/png", key=f"dl_png_{filename}_{abs(hash(label))}")
     except Exception as exc:  # pragma: no cover - GUI only
         st.warning(f"Unable to export chart: {exc}")
 
@@ -517,7 +519,7 @@ def _generate_pdf_report(top_issues: pd.DataFrame, persistence: pd.DataFrame, re
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas
     except Exception as exc:  # pragma: no cover - optional dependency
-        return None, f"reportlab not installed: {exc}"
+        return None, f"PDF export dependency not available: {exc}"
 
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
@@ -1101,6 +1103,9 @@ def _ingestion_stepper(raw_df, mapping_cfg, normalized_df, validation_results):
 
 
 def main():
+    # Reset per-rerun download key counter
+    st.session_state['_dl_counter'] = 0
+
     _init_state()
     shell = AppShell("Gradescope Rubric Analytics", "Guided ingestion → validation → insights")
     shell.header(right="Modern UI beta")
