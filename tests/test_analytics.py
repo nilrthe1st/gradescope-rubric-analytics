@@ -5,6 +5,7 @@ from gradescope_analytics.metrics import (
     compute_persistence,
     error_by_exam,
     exam_breakdown,
+    exam_changes,
     group_comparison,
     overall_summary,
     rubric_item_stats,
@@ -164,3 +165,11 @@ def test_compute_recommendations_filters_disallowed_concepts():
     assert not recs.empty
     assert set(recs["concept"]) == {"Allowed"}
     assert "Blocked" not in set(recs["concept"])
+
+
+def test_exam_changes_delta_order(sample_df):
+    order = ["Exam1", "Exam2", "Exam3"]
+    changes = exam_changes(sample_df, exam_order=order)
+    assert list(changes["exam_id"].astype(str)) == order
+    assert "delta_vs_prev" in changes.columns
+    assert "pct_change_vs_prev" in changes.columns

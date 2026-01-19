@@ -60,6 +60,27 @@ def exam_breakdown(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values(by="exam_id")
 
 
+def exam_changes(df: pd.DataFrame, exam_order: Optional[Iterable[str]] = None) -> pd.DataFrame:
+    """Compute exam-over-exam changes in total points lost.
+
+    Returns columns: exam_id, total_points_lost, delta_vs_prev, pct_change_vs_prev.
+    """
+
+    breakdown = exam_breakdown(df)
+    if breakdown.empty:
+        return breakdown
+
+    order = list(exam_order) if exam_order else sorted(breakdown["exam_id"].astype(str).unique())
+    breakdown = breakdown.copy()
+    cat = pd.CategoricalDtype(categories=order, ordered=True)
+    breakdown.loc[:, "exam_id"] = breakdown["exam_id"].astype(cat)
+    breakdown = breakdown.sort_values("exam_id")
+
+    breakdown.loc[:, "delta_vs_prev"] = breakdown["total_points_lost"].diff()
+    breakdown.loc[:, "pct_change_vs_prev"] = breakdown["total_points_lost"].pct_change()
+    return breakdown
+
+
 def student_summary(df: pd.DataFrame, exam_order: Optional[Iterable[str]] = None) -> pd.DataFrame:
     data = _cast_numeric(ensure_canonical_columns(df))
     grouped = data.groupby(["student_id", "exam_id"], dropna=False)

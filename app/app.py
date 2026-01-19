@@ -16,6 +16,7 @@ import streamlit as st
 import json
 from datetime import datetime
 from itertools import combinations
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -539,6 +540,39 @@ def _download_df(label, df, filename, mime="text/csv"):
         use_container_width=False,
     )
 
+
+def _download_packet(artifact_map: Dict[str, pd.DataFrame], fig_map: Optional[Dict[str, object]] = None, label: str = "Download instructor packet"):
+    if not artifact_map:
+        st.caption("No artifacts available to export.")
+        return
+
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, df in artifact_map.items():
+            if df is None or getattr(df, "empty", False):
+                continue
+            zf.writestr(f"{name}.csv", df.to_csv(index=False))
+
+        if fig_map:
+            for name, fig in fig_map.items():
+                if fig is None:
+                    continue
+                try:
+                    png = fig.to_image(format="png")
+                    zf.writestr(f"{name}.png", png)
+                except Exception:
+                    # If image export fails, skip quietly
+                    continue
+
+    st.download_button(
+        label,
+        data=buffer.getvalue(),
+        file_name="instructor_packet.zip",
+        mime="application/zip",
+        use_container_width=False,
+        key=f"packet_{abs(hash(label))}",
+    )
+
 def _download_fig(label: str, fig, filename: str):
     if fig is None or not fig.data:
         st.caption("No chart to export")
@@ -737,6 +771,7 @@ def _render_overview(
         {"label": "Total points lost", "value": f"{total_points:.1f}"},
     ]
     kpi_row(kpis)
+    st.caption("Avg/Std dev per student are computed on total points lost per student in the current scope.")
 
     persistence = metrics.compute_persistence(df, exam_order=exam_order)
     col_left, col_right = st.columns([0.65, 0.35])
@@ -1031,6 +1066,98 @@ def _render_predictive(df: pd.DataFrame, exam_order: List[str]):
     st.caption("Disclaimer: These probabilities are estimates based on limited history; treat as guidance, not guarantees.")
 
 
+def _top_concepts(df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
+    concept_stats = _concept_stats(df)
+    if concept_stats.empty:
+        return concept_stats
+    concept_stats = concept_stats.copy()
+    concept_stats.loc[:, "impact_score"] = concept_stats["points_lost_total"] * concept_stats["students_affected"].clip(lower=1)
+    return concept_stats.sort_values(by="impact_score", ascending=False).head(limit)
+
+
+def _top_persistent_concepts(df: pd.DataFrame, exam_order: List[str], limit: int = 5) -> pd.DataFrame:
+    persistence = metrics.compute_persistence(df, exam_order=exam_order)
+    if persistence.empty:
+        return persistence
+    return persistence.sort_values(by=["persistence_rate", "cohort_size"], ascending=[False, False]).head(limit)
+
+
+def _exam_change_table(df: pd.DataFrame, exam_order: List[str]) -> pd.DataFrame:
+    changes = metrics.exam_changes(df, exam_order=exam_order)
+    if changes.empty:
+        return changes
+    changes = changes.copy()
+    changes.loc[:, "delta_vs_prev"] = changes["delta_vs_prev"].fillna(0.0).round(2)
+    changes.loc[:, "pct_change_vs_prev"] = changes["pct_change_vs_prev"].fillna(0.0).round(3)
+    return changes
+
+
+def _lesson_plan_suggestions(top_concepts: pd.DataFrame, top_persist: pd.DataFrame) -> List[str]:
+    suggestions: List[str] = []
+    if not top_concepts.empty:
+        first = top_concepts.iloc[0]
+        suggestions.append(
+            f"Prioritize reteaching **{first['concept']}**; it has the highest impact score ({first['impact_score']:.1f})."
+        )
+    if not top_persist.empty:
+        first_persist = top_persist.iloc[0]
+        suggestions.append(
+            f"Address recurring concept **{first_persist['rubric_item'] if 'rubric_item' in first_persist else first_persist['concept']}**; repeat rate {first_persist['persistence_rate']:.0%} across {int(first_persist['cohort_size'])} students."
+        )
+    if len(suggestions) < 3:
+        suggestions.append("Add 10-minute targeted practice on top two concepts, then quick formative check.")
+    suggestions.append("Share anonymized exemplars for the highest-impact misconception to speed feedback loops.")
+    return suggestions
+
+
+def _render_instructor_summary(df: pd.DataFrame, exam_order: List[str], personal_mode: bool):
+    st.subheader("Instructor Summary")
+    if personal_mode:
+        st.info("Personal mode: metrics are shown for transparency; avoid sharing externally when cohort < 5.")
+
+    top_concepts = _top_concepts(df)
+    top_persist = _top_persistent_concepts(df, exam_order)
+    exam_changes = _exam_change_table(df, exam_order)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Top concepts by impact**")
+        if top_concepts.empty:
+            st.caption("Add topics or concept mappings to see concept impact.")
+        else:
+            st.dataframe(top_concepts, use_container_width=True, height=260)
+            st.caption("Impact = total points lost × students affected.")
+            _download_df("Download top concepts", top_concepts, "top_concepts.csv")
+    with col2:
+        st.markdown("**Most persistent concepts**")
+        if top_persist.empty:
+            st.caption("Need at least two exams with repeated concepts to compute persistence.")
+        else:
+            st.dataframe(top_persist, use_container_width=True, height=260)
+            st.caption("Persistence rate = repeated students / cohort from first exam in order.")
+            _download_df("Download persistent concepts", top_persist, "persistent_concepts.csv")
+
+    st.markdown("**Exam-over-exam changes**")
+    if exam_changes.empty:
+        st.caption("Upload at least two exams to see changes in total points lost.")
+    else:
+        st.dataframe(exam_changes, use_container_width=True, height=260)
+        st.caption("Delta shows change in total points lost vs. prior exam; pct_change is relative change.")
+        _download_df("Download exam changes", exam_changes, "exam_changes.csv")
+
+    suggestions = _lesson_plan_suggestions(top_concepts, top_persist)
+    st.markdown("**Suggested lesson plan adjustments**")
+    for s in suggestions:
+        st.markdown(f"- {s}")
+
+    artifacts = {
+        "top_concepts": top_concepts,
+        "persistent_concepts": top_persist,
+        "exam_changes": exam_changes,
+    }
+    _download_packet(artifacts, fig_map=None, label="Download instructor packet (ZIP)")
+
+
 def _render_persistence(df: pd.DataFrame, exam_order: List[str], personal_mode: bool = False):
     if personal_mode:
         st.info("Persistence is hidden in personal mode (fewer than 5 students).")
@@ -1044,6 +1171,7 @@ def _render_persistence(df: pd.DataFrame, exam_order: List[str], personal_mode: 
 
     with card("Persistence by rubric item"):
         st.dataframe(persistence, use_container_width=True, height=260)
+        st.caption("Cohort = students with item in first exam; persistence_rate = repeated / cohort across later exams.")
         _download_df("Download persistence (CSV)", persistence, "persistence.csv")
 
     st.subheader("Rubric occurrences by exam")
@@ -1266,12 +1394,19 @@ def main():
 
     section_header("Step 4 — Explore")
     exam_order = _exam_order(filtered_df)
-    overview_tab, persistence_tab, quality_tab = st.tabs(["Overview", "Persistence", "Data Quality"])
+    overview_tab, persistence_tab, instructor_tab, quality_tab = st.tabs([
+        "Overview",
+        "Persistence",
+        "Instructor Summary",
+        "Data Quality",
+    ])
 
     with overview_tab:
         _render_overview(filtered_df, exam_order, allowed_concepts, include_unmapped, personal_mode=personal_mode)
     with persistence_tab:
         _render_persistence(filtered_df, exam_order, personal_mode=personal_mode)
+    with instructor_tab:
+        _render_instructor_summary(filtered_df, exam_order, personal_mode)
     with quality_tab:
         _render_quality(filtered_df)
 
