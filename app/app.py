@@ -487,7 +487,7 @@ def _concept_mapping_controls(df: pd.DataFrame) -> Dict[str, str]:
         hide_index=True,
         column_config={
             "rubric_item": st.column_config.TextColumn("Rubric item", width="medium", disabled=True),
-            "concept": st.column_config.TextColumn("Concept", help="Type a concept or pick an existing one", autocomplete=concept_suggestions),
+            "concept": st.column_config.TextColumn("Concept", help="Type a concept or pick an existing one"),
         },
         num_rows="fixed",
     )
