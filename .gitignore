@@ -30,3 +30,8 @@ data/persisted/
 
 # macOS
 .DS_Store
+
+# local/generated data
+/data/concept_mappings.json
+/data/synthetic_class.csv
+/data/exports/
