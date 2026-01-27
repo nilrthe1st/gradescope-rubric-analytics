@@ -144,6 +144,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     generate_synthetic_dataset(args.template, args.output, n_students=args.students, seed=args.seed)
+    # Keep console output minimal to avoid leaking data in logs
     print(f"Synthetic dataset written to {args.output}")
 
 

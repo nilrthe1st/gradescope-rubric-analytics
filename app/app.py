@@ -31,12 +31,14 @@ from gradescope_analytics.concepts import apply_concept_column, load_concept_map
 from gradescope_analytics.io import normalize_dataframe  # noqa: E402
 from gradescope_analytics.mapping import MappingConfig, needs_mapping, suggest_mapping  # noqa: E402
 from gradescope_analytics.recommendations import compute_recommendations  # noqa: E402
+from gradescope_analytics.security import build_export_path, sanitize_filename  # noqa: E402
 from tools.generate_synthetic import generate_synthetic_dataset  # noqa: E402
 
 st.set_page_config(page_title="Gradescope Rubric Analytics", layout="wide", page_icon="📊")
 
 DATA_DIR = ROOT / "data"
 CONCEPT_MAPPING_PATH = DATA_DIR / "concept_mappings.json"
+SAFE_EXPORT_DIR = DATA_DIR / "exports"
 
 
 def _rerun():
@@ -83,7 +85,7 @@ def _init_state() -> None:
         "selected_rubric": None,
         "source_label": None,
         "concept_mapping": None,
-        "anonymize_ids": False,
+        "anonymize_ids": True,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -529,12 +531,16 @@ def _download_df(label, df, filename, mime="text/csv"):
     st.session_state["_dl_counter"] = ctr
 
     key = f"dl:{filename}:{ctr}:{uuid.uuid4().hex}"
+    SAFE_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = sanitize_filename(filename)
+    path = build_export_path(SAFE_EXPORT_DIR, safe_name)
     data = df.to_csv(index=False).encode("utf-8")
+    path.write_bytes(data)
 
     st.download_button(
         label=label,
-        data=data,
-        file_name=filename,
+        data=path.read_bytes(),
+        file_name=safe_name,
         mime=mime,
         key=key,
         use_container_width=False,
@@ -546,12 +552,17 @@ def _download_packet(artifact_map: Dict[str, pd.DataFrame], fig_map: Optional[Di
         st.caption("No artifacts available to export.")
         return
 
+    SAFE_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = sanitize_filename("instructor_packet.zip")
+    packet_path = build_export_path(SAFE_EXPORT_DIR, safe_name)
+
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name, df in artifact_map.items():
             if df is None or getattr(df, "empty", False):
                 continue
-            zf.writestr(f"{name}.csv", df.to_csv(index=False))
+            safe = sanitize_filename(f"{name}.csv")
+            zf.writestr(safe, df.to_csv(index=False))
 
         if fig_map:
             for name, fig in fig_map.items():
@@ -559,15 +570,17 @@ def _download_packet(artifact_map: Dict[str, pd.DataFrame], fig_map: Optional[Di
                     continue
                 try:
                     png = fig.to_image(format="png")
-                    zf.writestr(f"{name}.png", png)
+                    zf.writestr(sanitize_filename(f"{name}.png"), png)
                 except Exception:
                     # If image export fails, skip quietly
                     continue
 
+    packet_path.write_bytes(buffer.getvalue())
+
     st.download_button(
         label,
-        data=buffer.getvalue(),
-        file_name="instructor_packet.zip",
+        data=packet_path.read_bytes(),
+        file_name=safe_name,
         mime="application/zip",
         use_container_width=False,
         key=f"packet_{abs(hash(label))}",
@@ -578,8 +591,12 @@ def _download_fig(label: str, fig, filename: str):
         st.caption("No chart to export")
         return
     try:
+        SAFE_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        safe_name = sanitize_filename(filename)
         payload = fig.to_image(format="png")
-        st.download_button(label, payload, file_name=filename, mime="image/png", key=f"dl_png_{filename}_{abs(hash(label))}")
+        path = build_export_path(SAFE_EXPORT_DIR, safe_name)
+        path.write_bytes(payload)
+        st.download_button(label, path.read_bytes(), file_name=safe_name, mime="image/png", key=f"dl_png_{filename}_{abs(hash(label))}")
     except Exception as exc:  # pragma: no cover - GUI only
         st.warning(f"Unable to export chart: {exc}")
 
@@ -1297,12 +1314,13 @@ def main():
         st.session_state["synthetic_mode"] = False
     st.session_state["demo_mode"] = demo_mode
 
-    anonymize_default = st.session_state.get("anonymize_ids", False)
-    anonymize_ids = st.sidebar.toggle(
-        "Anonymize student IDs",
-        value=anonymize_default,
-        help="Replace student_id values with deterministic aliases across all visuals and downloads.",
+    anonymize_default = st.session_state.get("anonymize_ids", True)
+    reveal_identifiers = st.sidebar.toggle(
+        "Reveal identifiers (instructor mode)",
+        value=not anonymize_default,
+        help="Show raw student_id values. Default remains anonymized for privacy.",
     )
+    anonymize_ids = not reveal_identifiers
     st.session_state["anonymize_ids"] = anonymize_ids
 
     uploader = st.sidebar.file_uploader("Upload rubric CSV", type=["csv"])
